@@ -13,6 +13,8 @@ from .budget import GROUPS, get_group
 from .catalog import Catalog
 from .client import AuthRejected, SpliceClient, SpliceError
 from .config import DEFAULT_CONFIG_PATH, DELAY_KINDS, Config, Delay, load_config
+from .rank import build_shortlist
+from .review import write_review_page
 from .throttle import Throttle
 
 EXIT_OK, EXIT_ERROR, EXIT_AUTH = 0, 1, 2
@@ -93,6 +95,23 @@ def cmd_search(args, config: Config) -> int:
     return EXIT_OK
 
 
+def cmd_shortlist(args, config: Config) -> int:
+    group = get_group(args.group)
+    size = args.size or config.batch_size
+    catalog = Catalog(config.catalog_path)
+    samples = build_shortlist(catalog.rows_for_group(group.id), group, size, config.per_pack_cap)
+    if not samples:
+        print(f"nothing to shortlist for {group.id}; run `search --group {group.id}` first")
+        return EXIT_OK
+    batch_id = f"{group.id}-{datetime.now():%Y%m%d-%H%M%S}"
+    path = write_review_page(samples, group, batch_id, config.data_dir / "review")
+    catalog.mark_shortlisted([s.catalog_uuid for s in samples], batch_id)
+    print(f"review page: {path}")
+    print(f"{len(samples)} sounds; approving all would cost {len(samples)} credits "
+          f"(group budget {group.credits})")
+    return EXIT_OK
+
+
 # -- parser --------------------------------------------------------------------
 
 
@@ -119,6 +138,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--pages", type=int, default=4)
     s.add_argument("--query", help="one query instead of the group's queries")
     s.set_defaults(func=cmd_search)
+
+    s = sub.add_parser("shortlist", help="rank a group and write an HTML review page")
+    s.add_argument("--group", required=True)
+    s.add_argument("--size", type=int, help="sounds per batch (default: config batch_size)")
+    s.set_defaults(func=cmd_shortlist)
 
     return p
 
