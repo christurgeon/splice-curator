@@ -313,3 +313,14 @@ def test_suite_blocks_real_network(session, throttle, config):
     c = SpliceClient(session, throttle, config)  # no MockTransport
     with pytest.raises(AssertionError):
         c._http.post("https://surfaces-graphql.splice.com/graphql", content=b"{}")
+
+
+def test_search_query_puts_sample_fields_on_sample_fragment():
+    # Splice rejects `asset_category_slug` on IAsset (HTTP 400, seen live 2026-10-23).
+    from splice_curator import queries
+
+    doc = queries.SEARCH.template
+    iasset = doc.split("... on IAsset {")[1].split("}")[0]
+    sample = doc.split("... on SampleAsset {")[1].split("}")[0]
+    assert "asset_category_slug" not in iasset
+    assert "asset_category_slug" in sample

@@ -24,7 +24,6 @@ SEARCH = Template("""query SamplesSearch {
         uuid
         name
         licensed
-        asset_category_slug
         tags { label taxonomy { name } }
         files { asset_file_type_slug url }
       }
@@ -33,7 +32,7 @@ SEARCH = Template("""query SamplesSearch {
           items { ... on PackAsset { name main_genre provider { name } } }
         }
       }
-      ... on SampleAsset { bpm key chord_type duration instrument }
+      ... on SampleAsset { bpm key chord_type duration instrument asset_category_slug }
       ... on ILegacyAsset { catalog_uuid }
     }
   }
