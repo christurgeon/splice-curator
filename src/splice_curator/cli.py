@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from .auth import COOKIE_NAMES, AuthError, load_session
 from .budget import GROUPS, get_group
+from .buy import CAP_REASONS, run_buy
 from .catalog import Catalog
 from .client import AuthRejected, SpliceClient, SpliceError
 from .config import DEFAULT_CONFIG_PATH, DELAY_KINDS, Config, Delay, load_config
@@ -134,6 +135,48 @@ def cmd_sync(args, config: Config) -> int:
     return EXIT_OK
 
 
+def cmd_buy(args, config: Config) -> int:
+    client = build_client(config, args.source)
+    catalog = Catalog(config.catalog_path)
+    caps = [c for c in (args.max_credits, config.max_purchases_per_run) if c is not None]
+    max_credits = min(caps) if caps else None
+    if args.confirm:
+        _log(f"buying for real: up to {max_credits if max_credits is not None else 'all'} credits, "
+             f"daily cap {config.max_purchases_per_day}")
+    report = run_buy(
+        client, catalog, Path(args.approved),
+        confirm=args.confirm,
+        max_credits=max_credits,
+        daily_cap=config.max_purchases_per_day,
+        today=date.today(),
+        staging=None if args.no_download else config.staging_dir,
+    )
+    if report.dry_run:
+        needed = report.planned - report.skipped_owned
+        print(f"planned: {report.planned}")
+        print(f"already owned: {report.skipped_owned}")
+        print(f"credits needed: {needed}")
+        print(f"credits available: {report.credits_before}")
+        print(f"bought today: {catalog.purchases_on(date.today())} of {config.max_purchases_per_day}")
+        print("dry run: no credits spent (add --confirm to buy)")
+        return EXIT_OK
+    print(f"bought {report.bought}, already owned {report.skipped_owned}, "
+          f"credits {report.credits_before} -> {report.credits_after}")
+    expected = None if report.credits_before is None else report.credits_before - report.bought
+    if report.credits_after is not None and expected is not None and report.credits_after != expected:
+        print(f"warning: expected {expected} credits left, Splice reports {report.credits_after}", file=sys.stderr)
+    for uuid in report.download_failed:
+        print(f"  download failed (run sync later): {uuid}")
+    for uuid in report.uncertain:
+        print(f"  UNCERTAIN, check on splice.com: {uuid}", file=sys.stderr)
+    if report.stopped_reason:
+        print(f"stopped: {report.stopped_reason}", file=sys.stderr)
+        if report.stopped_reason in CAP_REASONS:
+            return EXIT_OK
+        return EXIT_AUTH if "log in" in report.stopped_reason else EXIT_ERROR
+    return EXIT_OK
+
+
 # -- parser --------------------------------------------------------------------
 
 
@@ -170,6 +213,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int, help="download at most N files")
     s.add_argument("--no-refresh", action="store_true", help="skip listing owned sounds from Splice")
     s.set_defaults(func=cmd_sync)
+
+    s = sub.add_parser("buy", parents=[common], help="license approved sounds (dry run unless --confirm)")
+    s.add_argument("approved", metavar="APPROVED.json")
+    s.add_argument("--confirm", action="store_true", help="really spend credits")
+    s.add_argument("--max-credits", type=int, help="spend at most N credits this run")
+    s.add_argument("--no-download", action="store_true", help="do not download after each purchase")
+    s.set_defaults(func=cmd_buy)
 
     return p
 
