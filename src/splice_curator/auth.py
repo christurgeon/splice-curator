@@ -10,11 +10,14 @@ import base64
 import json
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 TOKEN_COOKIE = "_splice_token_prod"
 # Cookie names the site sends (docs/api-notes.md).
 COOKIE_NAMES: tuple[str, ...] = (TOKEN_COOKIE, "XSRF-TOKEN")
 ENV_VAR = "SPLICE_TOKEN"
+PROFILE_ENV_VAR = "SPLICE_CHROME_PROFILE"
+CHROME_DIR = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
 
 
 class AuthError(Exception):
@@ -52,13 +55,26 @@ class Session:
         return jwt_expiry(self.token)
 
 
+def chrome_cookie_file(chrome_dir: Path) -> Path:
+    """Cookie DB of the profile Chrome used last, unless SPLICE_CHROME_PROFILE names one."""
+    profile = os.environ.get(PROFILE_ENV_VAR, "").strip()
+    if not profile:
+        try:
+            state = json.loads((chrome_dir / "Local State").read_text())
+            profile = state["profile"]["last_used"]
+        except Exception:
+            profile = "Default"
+    network = chrome_dir / profile / "Network" / "Cookies"
+    return network if network.is_file() else chrome_dir / profile / "Cookies"
+
+
 def _chrome_cookies() -> dict[str, str]:
     try:
         import pycookiecheat
     except ImportError:
         raise AuthError("install with: uv sync --extra chrome") from None
     try:
-        return dict(pycookiecheat.chrome_cookies("https://splice.com"))
+        return dict(pycookiecheat.chrome_cookies("https://splice.com", cookie_file=chrome_cookie_file(CHROME_DIR)))
     except Exception as exc:  # message from the library never holds cookie values
         raise AuthError(f"could not read Chrome cookies ({type(exc).__name__})") from None
 

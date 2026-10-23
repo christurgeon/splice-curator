@@ -3,10 +3,12 @@ import types
 
 import pytest
 
+from splice_curator import auth
 from splice_curator.auth import (
     COOKIE_NAMES,
     AuthError,
     Session,
+    chrome_cookie_file,
     jwt_expiry,
     load_session,
 )
@@ -75,7 +77,7 @@ def test_chrome_filters_cookie_names(monkeypatch):
     fake = types.ModuleType("pycookiecheat")
     calls = []
 
-    def chrome_cookies(url):
+    def chrome_cookies(url, cookie_file=None):
         calls.append(url)
         return {"_splice_token_prod": tok, "XSRF-TOKEN": "x", "other": "y"}
 
@@ -92,3 +94,42 @@ def test_chrome_missing_library(monkeypatch):
     with pytest.raises(AuthError) as exc:
         load_session("chrome", NOW, COOKIE_NAMES)
     assert "uv sync --extra chrome" in str(exc.value)
+
+
+def test_chrome_cookie_file_uses_last_used_profile(tmp_path, monkeypatch):
+    monkeypatch.delenv("SPLICE_CHROME_PROFILE", raising=False)
+    (tmp_path / "Local State").write_text('{"profile": {"last_used": "Profile 1"}}')
+    assert chrome_cookie_file(tmp_path) == tmp_path / "Profile 1" / "Cookies"
+
+
+def test_chrome_cookie_file_prefers_network_cookies(tmp_path, monkeypatch):
+    monkeypatch.delenv("SPLICE_CHROME_PROFILE", raising=False)
+    (tmp_path / "Default" / "Network").mkdir(parents=True)
+    (tmp_path / "Default" / "Network" / "Cookies").write_text("")
+    assert chrome_cookie_file(tmp_path) == tmp_path / "Default" / "Network" / "Cookies"
+
+
+def test_chrome_cookie_file_env_override_and_default(tmp_path, monkeypatch):
+    (tmp_path / "Local State").write_text("not json")
+    monkeypatch.delenv("SPLICE_CHROME_PROFILE", raising=False)
+    assert chrome_cookie_file(tmp_path) == tmp_path / "Default" / "Cookies"
+    monkeypatch.setenv("SPLICE_CHROME_PROFILE", "Profile 3")
+    assert chrome_cookie_file(tmp_path) == tmp_path / "Profile 3" / "Cookies"
+
+
+def test_load_session_passes_profile_cookie_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("SPLICE_CHROME_PROFILE", raising=False)
+    (tmp_path / "Local State").write_text('{"profile": {"last_used": "Profile 1"}}')
+    monkeypatch.setattr(auth, "CHROME_DIR", tmp_path)
+    tok = make_jwt({"exp": int(NOW) + 3600})
+    seen = []
+    fake = types.ModuleType("pycookiecheat")
+
+    def chrome_cookies(url, cookie_file=None):
+        seen.append(cookie_file)
+        return {"_splice_token_prod": tok}
+
+    fake.chrome_cookies = chrome_cookies
+    monkeypatch.setitem(sys.modules, "pycookiecheat", fake)
+    load_session("chrome", NOW, COOKIE_NAMES)
+    assert seen == [tmp_path / "Profile 1" / "Cookies"]
