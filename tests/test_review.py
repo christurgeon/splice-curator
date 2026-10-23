@@ -15,10 +15,12 @@ def test_review_page_contains_rows_and_no_token(tmp_path):
     html = path.read_text()
     for s in samples:
         assert s.catalog_uuid in html
-        assert s.preview_url in html
+        assert f"https://splice.com/sounds/sample/{s.file_hash}" in html
+        # Splice scrambles preview MP3s; the page links to splice.com instead of playing them.
+        assert s.preview_url not in html
     assert "Bearer" not in html and "eyJ" not in html
     assert "</script><b>" not in html
-    assert '<audio' in html or "createElement('audio')" in html
+    assert "audio" not in html.lower()
     assert "approved-" in html
     assert "<script src" not in html
 

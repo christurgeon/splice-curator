@@ -1,7 +1,7 @@
 """Static HTML review page and the approved-list file it exports.
 
-Previews stream from Splice's URL inside the browser only; nothing here
-downloads or saves preview audio.
+Splice scrambles its preview MP3s, so the page does not play them. Each row
+links to the sound's page on splice.com, where Splice's own player plays it.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from .models import Sample
 
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 BATCH_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
+HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+SAMPLE_PAGE = "https://splice.com/sounds/sample/"
 
 
 def _script_json(value) -> str:
@@ -37,7 +39,7 @@ def _row(s: Sample) -> dict:
         "bpm": s.bpm,
         "key": (s.key or "") + (" " + s.chord_type if s.key and s.chord_type else ""),
         "tags": ", ".join(label for label, _ in s.tags),
-        "preview": s.preview_url,
+        "page": SAMPLE_PAGE + s.file_hash if HASH_RE.match(s.file_hash) else "",
     }
 
 
@@ -64,20 +66,19 @@ PAGE = """<!doctype html>
   tr.current { background: var(--cur); }
   tr.off td:not(.ctl) { opacity: .45; text-decoration: line-through; }
   td.tags { color: var(--muted); font-size: 12px; max-width: 280px; }
-  .err { color: #c62828; font-size: 12px; }
   kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
 </style>
 </head>
 <body>
 <header>
   <h1>__TITLE__</h1>
-  <p><span id="count"></span> &middot; <kbd>j</kbd>/<kbd>k</kbd> next/prev &middot; <kbd>space</kbd> play/pause
+  <p><span id="count"></span> &middot; <kbd>j</kbd>/<kbd>k</kbd> next/prev &middot; <kbd>o</kbd> open in Splice
      &middot; <kbd>x</kbd> toggle row &middot; <kbd>p</kbd> toggle pack
      &middot; <button id="export" type="button">Export approved</button></p>
 </header>
 <noscript>This page needs JavaScript.</noscript>
 <table>
-  <thead><tr><th class="ctl">OK</th><th>#</th><th>Preview</th><th>Name</th><th>Pack</th><th>Label</th><th>BPM</th><th>Key</th><th>Tags</th></tr></thead>
+  <thead><tr><th class="ctl">OK</th><th>#</th><th>Listen</th><th>Name</th><th>Pack</th><th>Label</th><th>BPM</th><th>Key</th><th>Tags</th></tr></thead>
   <tbody id="rows"></tbody>
 </table>
 <script type="application/json" id="data">__DATA__</script>
@@ -107,16 +108,15 @@ PAGE = """<!doctype html>
     ctl.appendChild(box);
     cell(tr, i + 1);
     var pv = cell(tr, null, 'ctl');
-    var audio = document.createElement('audio');
-    audio.preload = 'none';
-    audio.controls = true;
-    if (r.preview) audio.src = r.preview;
-    var err = document.createElement('div');
-    err.className = 'err';
-    audio.addEventListener('error', function () { err.textContent = 'preview expired — re-run shortlist'; });
-    if (!r.preview) err.textContent = 'no preview';
-    pv.appendChild(audio);
-    pv.appendChild(err);
+    if (r.page) {
+      var link = document.createElement('a');
+      link.href = r.page;
+      link.target = 'splice-preview';
+      link.textContent = 'open in Splice';
+      pv.appendChild(link);
+    } else {
+      pv.textContent = 'no link';
+    }
     cell(tr, r.name);
     var packTd = cell(tr, r.pack + ' ');
     var packBtn = document.createElement('button');
@@ -128,9 +128,9 @@ PAGE = """<!doctype html>
     cell(tr, r.bpm === null ? '' : r.bpm);
     cell(tr, r.key);
     cell(tr, r.tags, 'tags');
-    tr.addEventListener('click', function (e) { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') select(i, false); });
+    tr.addEventListener('click', function (e) { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') select(i); });
     tbody.appendChild(tr);
-    rows.push({ data: r, tr: tr, box: box, audio: audio });
+    rows.push({ data: r, tr: tr, box: box });
   });
 
   function refresh() {
@@ -142,25 +142,17 @@ PAGE = """<!doctype html>
     document.getElementById('count').textContent = n + ' of ' + rows.length + ' approved (' + n + ' credits)';
   }
 
-  function playing() {
-    return rows.some(function (row) { return !row.audio.paused; });
-  }
-
-  function select(i, keepPlaying) {
+  function select(i) {
     if (!rows.length) return;
-    var wasPlaying = keepPlaying && playing();
-    rows.forEach(function (row) { row.audio.pause(); });
     rows[cur].tr.classList.remove('current');
     cur = Math.max(0, Math.min(rows.length - 1, i));
     rows[cur].tr.classList.add('current');
     rows[cur].tr.scrollIntoView({ block: 'nearest' });
-    if (wasPlaying) play(rows[cur]);
   }
 
-  function play(row) {
-    try { row.audio.currentTime = 0; } catch (e) {}
-    var p = row.audio.play();
-    if (p && p.catch) p.catch(function () {});
+  // One reused tab, so stepping through rows does not pile up tabs.
+  function openInSplice(row) {
+    if (row.data.page) window.open(row.data.page, 'splice-preview');
   }
 
   function togglePack(i) {
@@ -173,9 +165,9 @@ PAGE = """<!doctype html>
   document.addEventListener('keydown', function (e) {
     if (e.metaKey || e.ctrlKey || e.altKey || !rows.length) return;
     var row = rows[cur];
-    if (e.key === 'j') { select(cur + 1, true); }
-    else if (e.key === 'k') { select(cur - 1, true); }
-    else if (e.key === ' ') { if (row.audio.paused) play(row); else row.audio.pause(); }
+    if (e.key === 'j') { select(cur + 1); }
+    else if (e.key === 'k') { select(cur - 1); }
+    else if (e.key === 'o') { openInSplice(row); }
     else if (e.key === 'x') { row.box.checked = !row.box.checked; refresh(); }
     else if (e.key === 'p') { togglePack(cur); }
     else return;
