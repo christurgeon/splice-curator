@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .models import Sample
 
+UNRANKED = 10**9  # position for rows not found by a ranked search
 PURCHASE_RESULTS = ("bought", "skipped_owned", "uncertain", "failed")
 
 SCHEMA = """
@@ -82,8 +83,15 @@ class Catalog:
     # -- writes ---------------------------------------------------------------
 
     def record_search(
-        self, samples: list[Sample], query: str, group: str | None, page: int, page_size: int
+        self,
+        samples: list[Sample],
+        query: str,
+        group: str | None,
+        page: int,
+        page_size: int,
+        ranked: bool = True,
     ) -> None:
+        """Upsert results. ``ranked=False`` (the owned-library listing) leaves positions alone."""
         now = datetime.now().isoformat(timespec="seconds")
         with self.db:
             self.db.execute(
@@ -92,6 +100,8 @@ class Catalog:
             )
             for index, s in enumerate(samples):
                 position = (page - 1) * page_size + index
+                if not ranked:
+                    position += UNRANKED
                 self.db.execute(
                     """
                     INSERT INTO samples (file_hash, catalog_uuid, name, pack, label, pack_genre, tags,

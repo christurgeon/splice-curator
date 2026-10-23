@@ -15,6 +15,7 @@ from .client import AuthRejected, SpliceClient, SpliceError
 from .config import DEFAULT_CONFIG_PATH, DELAY_KINDS, Config, Delay, load_config
 from .rank import build_shortlist
 from .review import write_review_page
+from .sync import refresh_owned, run_sync
 from .throttle import Throttle
 
 EXIT_OK, EXIT_ERROR, EXIT_AUTH = 0, 1, 2
@@ -112,6 +113,27 @@ def cmd_shortlist(args, config: Config) -> int:
     return EXIT_OK
 
 
+def cmd_sync(args, config: Config) -> int:
+    client = build_client(config, args.source)
+    catalog = Catalog(config.catalog_path)
+    if not args.no_refresh:
+        _log("listing owned sounds")
+        print(f"{refresh_owned(client, catalog)} owned sounds listed by Splice")
+    owned = len(catalog.licensed_rows())
+    _log(f"{owned} owned sounds in the catalog; downloading missing ones to {config.staging_dir}")
+    report = run_sync(
+        client, catalog, config.staging_dir, [config.splice_dir, config.staging_dir],
+        config.min_free_bytes, limit=args.limit,
+    )
+    print(f"downloaded {report.downloaded}, already on disk {report.skipped}, failed {len(report.failed)}")
+    for uuid in report.failed:
+        print(f"  failed: {uuid}")
+    if report.stopped_reason:
+        print(f"stopped: {report.stopped_reason}", file=sys.stderr)
+        return EXIT_AUTH if "log in" in report.stopped_reason else EXIT_ERROR
+    return EXIT_OK
+
+
 # -- parser --------------------------------------------------------------------
 
 
@@ -143,6 +165,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--group", required=True)
     s.add_argument("--size", type=int, help="sounds per batch (default: config batch_size)")
     s.set_defaults(func=cmd_shortlist)
+
+    s = sub.add_parser("sync", parents=[common], help="download owned sounds that are not on disk yet")
+    s.add_argument("--limit", type=int, help="download at most N files")
+    s.add_argument("--no-refresh", action="store_true", help="skip listing owned sounds from Splice")
+    s.set_defaults(func=cmd_sync)
 
     return p
 
