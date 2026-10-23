@@ -14,6 +14,7 @@ from .buy import CAP_REASONS, run_buy
 from .catalog import Catalog
 from .client import AuthRejected, SpliceClient, SpliceError
 from .config import DEFAULT_CONFIG_PATH, DELAY_KINDS, Config, Delay, load_config
+from .organize import run_organize
 from .rank import build_shortlist
 from .review import write_review_page
 from .sync import refresh_owned, run_sync
@@ -177,6 +178,16 @@ def cmd_buy(args, config: Config) -> int:
     return EXIT_OK
 
 
+def cmd_organize(args, config: Config) -> int:
+    catalog = Catalog(config.catalog_path)
+    sources = [config.staging_dir, config.splice_dir]
+    _log(f"organizing {', '.join(str(s) for s in sources)} into {args.target}")
+    report = run_organize(catalog, sources, Path(args.target))
+    print(f"copied {report.copied}, already there {report.skipped}, unsorted {report.unsorted}")
+    print(f"catalog: {Path(args.target) / 'Samples' / 'catalog.csv'}")
+    return EXIT_OK
+
+
 # -- parser --------------------------------------------------------------------
 
 
@@ -221,6 +232,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-download", action="store_true", help="do not download after each purchase")
     s.set_defaults(func=cmd_buy)
 
+    s = sub.add_parser("organize", help="copy local files into an organized library")
+    s.add_argument("target", metavar="TARGET_DIR")
+    s.set_defaults(func=cmd_organize)
+
     return p
 
 
@@ -234,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         if "log in" not in str(exc):
             print("log in to splice.com again or check SPLICE_TOKEN", file=sys.stderr)
         return EXIT_AUTH
-    except (SpliceError, KeyError, ValueError) as exc:
+    except (SpliceError, KeyError, ValueError, OSError) as exc:
         message = exc.args[0] if isinstance(exc, KeyError) and exc.args else exc
         print(f"error: {message}", file=sys.stderr)
         return EXIT_ERROR
