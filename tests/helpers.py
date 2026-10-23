@@ -72,3 +72,26 @@ def search_response(items: list[dict], records: int = 40448, page: int = 1, page
         "pagination_metadata": {"currentPage": page, "totalPages": pages},
         "items": items,
     }}}
+
+
+def make_sample(i: int = 1, **kw):
+    from splice_curator.models import Sample
+
+    base = dict(
+        file_hash=f"{i:064x}",
+        catalog_uuid=f"00000000-0000-4000-8000-{i:012x}",
+        name=f"Pack A/kicks/Kick_{i}.wav",
+        pack="Pack A",
+        label="Label A",
+        pack_genre="house",
+        tags=[("kicks", None), ("house", "Genre")],
+        bpm=None,
+        key=None,
+        chord_type=None,
+        duration_ms=500,
+        category="oneshot",
+        licensed=False,
+        preview_url=f"https://spliceproduction.s3.us-west-1.amazonaws.com/audio_samples/{i:064x}/p.mp3",
+    )
+    base.update(kw)
+    return Sample(**base)
