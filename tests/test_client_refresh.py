@@ -143,6 +143,16 @@ def test_401_twice_raises(config):
     assert len(env.requests) == 2
 
 
+def test_401_on_unexpired_token_does_not_wait_for_chrome(config):
+    # A 401 on a token that has not expired is a server-side rejection: try Chrome once, then stop.
+    env = Env(config, session_for(3600), [session_for(3600)], handler=lambda r: httpx.Response(401))
+    with pytest.raises(AuthRejected):
+        env.client.account()
+    assert env.refresher_calls == 1
+    assert max(env.sleeps, default=0) < config.refresh_poll_s
+    assert len(env.requests) == 1
+
+
 def test_401_without_refresher_raises_as_before(config):
     env = Env(config, session_for(3600), handler=lambda r: httpx.Response(401), with_refresher=False)
     with pytest.raises(AuthRejected) as exc:

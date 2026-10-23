@@ -201,6 +201,9 @@ class SpliceClient:
             raise AuthRejected("token expires soon; log in to splice.com again")
         if self._try_refresh():
             return
+        if force and exp is not None and exp - self._clock() > self.config.refresh_margin_s:
+            # A 401 on an unexpired token is a server-side rejection; waiting for Chrome will not help.
+            raise AuthRejected(LOGIN_AGAIN)
         cfg = self.config
         print(f"waiting for Chrome to renew the Splice login — keep a splice.com tab open "
               f"(up to {cfg.refresh_wait_s / 60:g} min)", file=sys.stderr, flush=True)
