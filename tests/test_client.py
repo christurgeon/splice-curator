@@ -307,3 +307,9 @@ def test_errors_never_contain_token(session, throttle, config, token, tmp_path):
     assert {type(e) for e in errors} == {AuthRejected, RateLimited, PurchaseUncertain, SpliceError, DownloadRejected}
     for e in errors:
         assert token not in str(e) and token not in repr(e)
+
+
+def test_suite_blocks_real_network(session, throttle, config):
+    c = SpliceClient(session, throttle, config)  # no MockTransport
+    with pytest.raises(AssertionError):
+        c._http.post("https://surfaces-graphql.splice.com/graphql", content=b"{}")

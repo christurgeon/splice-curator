@@ -25,6 +25,17 @@ class SpyThrottle(Throttle):
         return super().backoff(attempt, retry_after)
 
 
+@pytest.fixture(autouse=True)
+def no_real_network(monkeypatch):
+    """Fail any test that would open a real connection (only MockTransport is allowed)."""
+    import httpx
+
+    def refuse(self, request):
+        raise AssertionError(f"real network request attempted: {request.url.host}")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", refuse)
+
+
 @pytest.fixture
 def token():
     return make_jwt({"exp": 4_000_000_000})
