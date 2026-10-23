@@ -1,0 +1,16 @@
+*.wav
+*.aif
+*.aiff
+*.mp3
+*.flac
+*.asd
+*.sqlite
+*.db
+.env
+.local/
+downloads/
+library/
+review/
+approved/
+.venv/
+__pycache__/
