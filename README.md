@@ -45,6 +45,9 @@ default; per-run overrides are available as flags.
 staging_dir = "/Volumes/SSD/SpliceCurator/downloads"
 max_purchases_per_day = 400
 per_pack_cap = 5
+refresh_margin_s = 300   # renew the login this long before it expires
+refresh_poll_s = 30      # seconds between Chrome checks while waiting
+refresh_wait_s = 900     # give up waiting for Chrome after this long
 
 [delays.search]
 min_s = 3

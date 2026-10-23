@@ -54,6 +54,9 @@ class Config:
     batch_size: int = 200
     user_agent: str = DEFAULT_USER_AGENT
     anonymous_id: str = ""
+    refresh_margin_s: int = 300
+    refresh_poll_s: float = 30.0
+    refresh_wait_s: float = 900.0
 
     @property
     def catalog_path(self) -> Path:

@@ -31,7 +31,8 @@ def build_client(config: Config, source: str) -> SpliceClient:
         config.pause_seconds,
         backoff_base_s=config.backoff_base_s,
     )
-    return SpliceClient(session, throttle, config)
+    refresher = (lambda: load_session("chrome", time.time(), COOKIE_NAMES)) if source == "chrome" else None
+    return SpliceClient(session, throttle, config, refresher=refresher)
 
 
 def _parse_delay(text: str) -> tuple[str, Delay]:

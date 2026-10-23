@@ -53,6 +53,10 @@ class Throttle:
         self._last = self._monotonic()
         return slept
 
+    def sleep(self, seconds: float) -> None:
+        """Sleep through the injected sleep function (used while waiting for a login renewal)."""
+        self._sleep(seconds)
+
     def backoff(self, attempt: int, retry_after: float | None) -> float:
         """Sleep before retry ``attempt`` (1-based); return seconds slept."""
         if retry_after is not None and retry_after >= 0:

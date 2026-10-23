@@ -9,13 +9,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 import httpx
 
 from . import queries
-from .auth import Session
+from .auth import AuthError, Session
 from .config import Config
 from .models import Account, AssetFiles, Sample, SearchPage
 from .throttle import Throttle
@@ -81,6 +84,10 @@ def check_download_url(url: httpx.URL | str) -> None:
         raise DownloadRejected(f"refusing download from {_safe_url(u)}")
 
 
+def _cookie_header(session: Session) -> str:
+    return "; ".join(f"{k}={v}" for k, v in session.cookies.items())
+
+
 def _parse_sample(item: dict) -> Sample:
     parents = ((item.get("parents") or {}).get("items")) or []
     pack = parents[0] if parents else {}
@@ -118,8 +125,12 @@ class SpliceClient:
         throttle: Throttle,
         config: Config,
         transport: httpx.BaseTransport | None = None,
+        refresher: Callable[[], Session] | None = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self.session = session
+        self.refresher = refresher
+        self._clock = clock
         self.throttle = throttle
         self.config = config
         headers = {
@@ -130,7 +141,7 @@ class SpliceClient:
             "referer": REFERER,
             "user-agent": config.user_agent,
             "x-anonymous-id": config.anonymous_id,
-            "cookie": "; ".join(f"{k}={v}" for k, v in session.cookies.items()),
+            "cookie": _cookie_header(session),
         }
         self._http = httpx.Client(transport=transport, timeout=30, follow_redirects=False, headers=headers)
         # Downloads go to signed S3 URLs: no Splice token or cookies.
@@ -159,7 +170,51 @@ class SpliceClient:
                 self.throttle.backoff(attempt, exc.retry_after)
         raise AssertionError("unreachable")
 
+    def _is_renewal(self, new: Session) -> bool:
+        """True if ``new`` outlives the current token and is not about to expire."""
+        new_exp, old_exp = new.expires_at, self.session.expires_at
+        if new_exp is None or (old_exp is not None and new_exp <= old_exp):
+            return False
+        return new_exp - self._clock() > self.config.refresh_margin_s
+
+    def _try_refresh(self) -> bool:
+        try:
+            new = self.refresher()
+        except AuthError:
+            return False  # Chrome may not have a fresh cookie yet; the caller keeps polling
+        if not self._is_renewal(new):
+            return False
+        self.session = new
+        self._http.headers["authorization"] = new.authorization
+        self._http.headers["cookie"] = _cookie_header(new)
+        stamp = datetime.fromtimestamp(self._clock())
+        print(f"[{stamp:%H:%M:%S}] renewed Splice login (expires {datetime.fromtimestamp(new.expires_at):%H:%M})",
+              file=sys.stderr, flush=True)
+        return True
+
+    def _ensure_fresh(self, force: bool = False) -> None:
+        """Make sure the GraphQL token is valid; pick up a renewed one from Chrome if not."""
+        exp = self.session.expires_at
+        if not force and exp is not None and exp - self._clock() > self.config.refresh_margin_s:
+            return
+        if self.refresher is None:
+            raise AuthRejected("token expires soon; log in to splice.com again")
+        if self._try_refresh():
+            return
+        cfg = self.config
+        print(f"waiting for Chrome to renew the Splice login — keep a splice.com tab open "
+              f"(up to {cfg.refresh_wait_s / 60:g} min)", file=sys.stderr, flush=True)
+        waited = 0.0
+        while waited < cfg.refresh_wait_s:
+            step = min(cfg.refresh_poll_s, cfg.refresh_wait_s - waited)
+            self.throttle.sleep(step)
+            waited += step
+            if self._try_refresh():
+                return
+        raise AuthRejected("Splice login expired and Chrome did not renew it; open splice.com in Chrome and run again")
+
     def _post_once(self, operation: str, query: str) -> httpx.Response:
+        self._ensure_fresh()
         return self._http.post(GRAPHQL_URL, content=json.dumps({"operationName": operation, "query": query}))
 
     @staticmethod
@@ -178,11 +233,22 @@ class SpliceClient:
         return body["data"]
 
     def _graphql(self, kind: str, operation: str, query: str) -> dict:
-        def attempt():
+        renewed = False
+
+        def post() -> httpx.Response:
             try:
-                r = self._post_once(operation, query)
+                return self._post_once(operation, query)
             except httpx.TransportError as exc:
                 raise _Retryable(f"network error ({type(exc).__name__})") from None
+
+        def attempt():
+            nonlocal renewed
+            r = post()
+            if r.status_code in (401, 403) and self.refresher is not None and not renewed:
+                renewed = True  # one forced renewal per call, then one retry
+                self._ensure_fresh(force=True)
+                self.throttle.wait(kind)
+                r = post()
             if r.status_code in (401, 403):
                 raise AuthRejected(LOGIN_AGAIN)
             if r.status_code == 429 or r.status_code >= 500:
