@@ -29,7 +29,7 @@ SEARCH = Template("""query SamplesSearch {
       }
       ... on IAssetChild {
         parents(filter: {asset_type_slug: pack}) {
-          items { ... on PackAsset { name main_genre provider { name } } }
+          items { ... on PackAsset { uuid name main_genre provider { name } } }
         }
       }
       ... on SampleAsset { bpm key chord_type duration instrument asset_category_slug }
@@ -52,4 +52,39 @@ ASSET_FILES = Template("""query AssetFiles {
 
 PURCHASE = Template("""mutation PurchaseAsset {
   purchaseAsset(uuid: "$uuid") { ... on IAsset { uuid licensed } }
+}""")
+
+PACK_SEARCH = Template("""query PackSearch {
+  assetsSearch(
+    filter: {asset_type_slug: pack$filter}
+    pagination: {page: $page, limit: $limit}
+    sort: {sort: popularity, order: DESC}
+  ) {
+    response_metadata { records }
+    pagination_metadata { currentPage totalPages }
+    items {
+      ... on PackAsset {
+        uuid name main_genre permalink_slug published_at
+        provider { name }
+        child_asset_counts { type count }
+        tags { label }
+      }
+    }
+  }
+}""")
+
+PACKS_CHART = Template("""query PacksChart {
+  legacyPacksChart(searchParams: {perPage: $per_page$provider}) {
+    uuid name permalink_slug current_global_chart_pos last_global_chart_pos
+    provider { uuid name permalink_slug }
+    child_asset_counts { count type }
+  }
+}""")
+
+LABELS_CHART = Template("""query LabelsChart {
+  wwwPremiumProviders(sort: "chart", per_page: $per_page) {
+    uuid legacy_uuid name permalink_slug
+    current_provider_chart_position last_provider_chart_position
+    pack_count tags_array
+  }
 }""")

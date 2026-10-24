@@ -21,6 +21,7 @@ class Sample:
     category: str
     licensed: bool
     preview_url: str | None
+    pack_uuid: str | None = None
 
     @property
     def basename(self) -> str:
@@ -52,3 +53,43 @@ class SearchPage:
     total_records: int
     total_pages: int
     samples: list[Sample]
+
+
+@dataclass
+class Pack:
+    uuid: str
+    name: str
+    genre: str | None
+    permalink: str | None
+    label: str | None
+    published_at: str | None
+    tags: list[str]
+    sample_count: int  # one-shots plus loops
+
+
+@dataclass
+class PackPage:
+    total_records: int
+    total_pages: int
+    packs: list[Pack]
+
+
+@dataclass
+class ChartPack:
+    uuid: str
+    name: str
+    label: str | None
+    position: int
+    last_position: int | None
+    scope: str  # "global" or a label permalink
+
+
+@dataclass
+class ChartLabel:
+    uuid: str
+    name: str
+    permalink: str | None
+    position: int
+    last_position: int | None
+    pack_count: int | None
+    tags: list[str]

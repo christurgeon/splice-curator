@@ -20,7 +20,7 @@ import httpx
 from . import queries
 from .auth import AuthError, Session
 from .config import Config
-from .models import Account, AssetFiles, Sample, SearchPage
+from .models import Account, AssetFiles, ChartLabel, ChartPack, Pack, PackPage, Sample, SearchPage
 from .throttle import Throttle
 
 GRAPHQL_URL = "https://surfaces-graphql.splice.com/graphql"
@@ -29,6 +29,7 @@ CATEGORIES = ("oneshot", "loop")
 SORTS = ("popularity", "relevance", "recency", "random")
 ALLOWED_HOST_SUFFIXES = (".splice.com", ".amazonaws.com")
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+SLUG_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 LOGIN_AGAIN = "Splice rejected the session; log in to splice.com again"
 
 
@@ -115,6 +116,41 @@ def _parse_sample(item: dict) -> Sample:
         category=item.get("asset_category_slug") or "",
         licensed=bool(item.get("licensed")),
         preview_url=preview,
+        pack_uuid=pack.get("uuid"),
+    )
+
+
+def _slug(value: str) -> str:
+    if not isinstance(value, str) or not SLUG_RE.match(value):
+        raise ValueError("bad permalink")
+    return value
+
+
+def _listing(value) -> list[dict]:
+    """A GraphQL list result, whether bare or wrapped in an object."""
+    if isinstance(value, dict):
+        value = next((v for v in value.values() if isinstance(v, list)), [])
+    return [v for v in value or [] if isinstance(v, dict)]
+
+
+def _opt_int(value) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_pack(item: dict) -> Pack:
+    counts = item.get("child_asset_counts") or []
+    return Pack(
+        uuid=item["uuid"],
+        name=item.get("name") or "",
+        genre=item.get("main_genre"),
+        permalink=item.get("permalink_slug"),
+        label=(item.get("provider") or {}).get("name"),
+        published_at=item.get("published_at"),
+        tags=[t["label"] for t in item.get("tags") or [] if t.get("label")],
+        sample_count=sum(_opt_int(c.get("count")) or 0 for c in counts if "sample" in str(c.get("type")).lower()),
     )
 
 
@@ -291,6 +327,7 @@ class SpliceClient:
         limit: int = 50,
         sort: str = "popularity",
         licensed: bool | None = None,
+        pack_uuid: str | None = None,
     ) -> SearchPage:
         if category is not None and category not in CATEGORIES:
             raise ValueError(f"category must be one of {CATEGORIES}")
@@ -306,6 +343,8 @@ class SpliceClient:
             extra += f", asset_category_slug: {category}"
         if licensed is not None:
             extra += f", licensed: {'true' if licensed else 'false'}"
+        if pack_uuid:
+            extra += f', children: {{parent_asset_uuid: "{_check_uuid(pack_uuid)}"}}'
         doc = queries.SEARCH.substitute(filter=extra, page=page, limit=limit, sort=sort)
         data = self._graphql("search", "SamplesSearch", doc)
         result = data.get("assetsSearch") or {}
@@ -315,6 +354,58 @@ class SpliceClient:
             total_pages=int((result.get("pagination_metadata") or {}).get("totalPages") or 0),
             samples=samples,
         )
+
+    def pack_samples(self, pack_uuid: str, category: str, page: int, limit: int = 100) -> SearchPage:
+        """Samples inside one pack, most popular first."""
+        return self.search(None, category, page, limit=limit, pack_uuid=pack_uuid)
+
+    def pack_search(self, query: str | None, page: int, limit: int = 50) -> PackPage:
+        """Packs, most popular first."""
+        page, limit = int(page), int(limit)
+        if page < 1 or not 1 <= limit <= 100:
+            raise ValueError("bad page or limit")
+        extra = f", query: {json.dumps(query)}" if query else ""
+        doc = queries.PACK_SEARCH.substitute(filter=extra, page=page, limit=limit)
+        result = self._graphql("search", "PackSearch", doc).get("assetsSearch") or {}
+        packs = [_parse_pack(i) for i in result.get("items") or [] if i and i.get("uuid")]
+        return PackPage(
+            total_records=int((result.get("response_metadata") or {}).get("records") or 0),
+            total_pages=int((result.get("pagination_metadata") or {}).get("totalPages") or 0),
+            packs=packs,
+        )
+
+    def packs_chart(self, per_page: int = 50, provider_permalink: str | None = None) -> list[ChartPack]:
+        """Weekly top packs, globally or for one label."""
+        extra = f", providerPermalink: {json.dumps(_slug(provider_permalink))}" if provider_permalink else ""
+        doc = queries.PACKS_CHART.substitute(per_page=int(per_page), provider=extra)
+        items = _listing(self._graphql("search", "PacksChart", doc).get("legacyPacksChart"))
+        scope = provider_permalink or "global"
+        charted = []
+        for item in items:
+            pos = _opt_int(item.get("current_global_chart_pos"))
+            if item.get("uuid") and pos is not None:
+                charted.append(ChartPack(
+                    uuid=item["uuid"], name=item.get("name") or "",
+                    label=(item.get("provider") or {}).get("name"),
+                    position=pos, last_position=_opt_int(item.get("last_global_chart_pos")), scope=scope,
+                ))
+        return charted
+
+    def labels_chart(self, per_page: int = 50) -> list[ChartLabel]:
+        """Weekly top labels."""
+        doc = queries.LABELS_CHART.substitute(per_page=int(per_page))
+        items = _listing(self._graphql("search", "LabelsChart", doc).get("wwwPremiumProviders"))
+        charted = []
+        for item in items:
+            pos = _opt_int(item.get("current_provider_chart_position"))
+            if item.get("uuid") and pos is not None:
+                charted.append(ChartLabel(
+                    uuid=item["uuid"], name=item.get("name") or "", permalink=item.get("permalink_slug"),
+                    position=pos, last_position=_opt_int(item.get("last_provider_chart_position")),
+                    pack_count=_opt_int(item.get("pack_count")),
+                    tags=[str(t) for t in item.get("tags_array") or []],
+                ))
+        return charted
 
     def asset_files(self, catalog_uuid: str) -> AssetFiles:
         doc = queries.ASSET_FILES.substitute(uuid=_check_uuid(catalog_uuid))

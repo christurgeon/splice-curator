@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
-from .models import Sample
+from .models import ChartLabel, ChartPack, Pack, Sample
 
 UNRANKED = 10**9  # position for rows not found by a ranked search
 PURCHASE_RESULTS = (
@@ -69,6 +69,55 @@ CREATE TABLE IF NOT EXISTS purchases (
 CREATE INDEX IF NOT EXISTS purchases_day ON purchases(day, result);
 """
 
+SCHEMA_VERSION = 1
+SAMPLE_COLUMNS_V1 = (
+    ("pack_uuid", "TEXT"),
+    ("in_pack_position", "INTEGER"),
+    ("in_pack_count", "INTEGER"),
+    ("price", "INTEGER"),
+)
+SCHEMA_V1 = """
+CREATE TABLE IF NOT EXISTS packs (
+    uuid TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    main_genre TEXT,
+    permalink TEXT,
+    label TEXT,
+    published_at TEXT,
+    tags TEXT NOT NULL DEFAULT '[]',
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    samples_fetched_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pack_ranks (
+    pack_uuid TEXT NOT NULL REFERENCES packs(uuid),
+    genre TEXT NOT NULL,
+    all_time_rank INTEGER NOT NULL,
+    recent_rank INTEGER,
+    PRIMARY KEY (pack_uuid, genre)
+);
+CREATE TABLE IF NOT EXISTS chart_packs (
+    scope TEXT NOT NULL,
+    pack_uuid TEXT NOT NULL,
+    name TEXT NOT NULL,
+    label TEXT,
+    position INTEGER NOT NULL,
+    last_position INTEGER,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (scope, pack_uuid)
+);
+CREATE TABLE IF NOT EXISTS chart_labels (
+    uuid TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    permalink TEXT,
+    position INTEGER NOT NULL,
+    last_position INTEGER,
+    pack_count INTEGER,
+    tags TEXT NOT NULL DEFAULT '[]',
+    fetched_at TEXT NOT NULL
+);
+"""
+
 
 @dataclass
 class CatalogRow:
@@ -78,6 +127,9 @@ class CatalogRow:
     local_path: str | None
     shortlisted_batch: str | None
     genres: set[tuple[str, str]] = field(default_factory=set)  # (genre, subtype) for the loaded group
+    in_pack_position: int | None = None  # 0-based popularity position inside the sample's pack
+    in_pack_count: int | None = None  # sounds of this category in the pack (for the percentile)
+    price: int | None = None
 
 
 class Catalog:
@@ -88,6 +140,22 @@ class Catalog:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Bring an older database up to ``SCHEMA_VERSION`` (tracked in ``PRAGMA user_version``)."""
+        (version,) = self.db.execute("PRAGMA user_version").fetchone()
+        if version >= SCHEMA_VERSION:
+            return
+        have = {r["name"] for r in self.db.execute("PRAGMA table_info(samples)")}
+        with self.db:
+            for name, kind in SAMPLE_COLUMNS_V1:
+                if name not in have:
+                    self.db.execute(f"ALTER TABLE samples ADD COLUMN {name} {kind}")
+            for statement in SCHEMA_V1.split(";"):
+                if statement.strip():
+                    self.db.execute(statement)
+            self.db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def close(self) -> None:
         self.db.close()
@@ -120,8 +188,8 @@ class Catalog:
                     """
                     INSERT INTO samples (file_hash, catalog_uuid, name, pack, label, pack_genre, tags,
                         bpm, key, chord_type, duration_ms, category, licensed, preview_url,
-                        best_position, best_query, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        best_position, best_query, updated_at, pack_uuid)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(file_hash) DO UPDATE SET
                         catalog_uuid = excluded.catalog_uuid,
                         name = excluded.name,
@@ -139,12 +207,13 @@ class Catalog:
                         best_query = CASE WHEN excluded.best_position < samples.best_position
                                      THEN excluded.best_query ELSE samples.best_query END,
                         best_position = MIN(samples.best_position, excluded.best_position),
-                        updated_at = excluded.updated_at
+                        updated_at = excluded.updated_at,
+                        pack_uuid = COALESCE(excluded.pack_uuid, samples.pack_uuid)
                     """,
                     (
                         s.file_hash, s.catalog_uuid, s.name, s.pack, s.label, s.pack_genre,
                         json.dumps(s.tags), s.bpm, s.key, s.chord_type, s.duration_ms,
-                        s.category, int(s.licensed), s.preview_url, position, query, now,
+                        s.category, int(s.licensed), s.preview_url, position, query, now, s.pack_uuid,
                     ),
                 )
                 if group:
@@ -191,6 +260,137 @@ class Catalog:
                 (at.isoformat(timespec="seconds"), at.date().isoformat(), catalog_uuid, result,
                  credits_before, credits_after),
             )
+
+    def record_pack_samples(self, samples: list[Sample], pack_uuid: str, first_position: int, count: int) -> None:
+        """Upsert sounds found inside a pack; positions go to the in-pack columns only.
+
+        New rows get the UNRANKED query position, so in-pack and query positions never mix.
+        """
+        now = datetime.now().isoformat(timespec="seconds")
+        with self.db:
+            for index, s in enumerate(samples):
+                self.db.execute(
+                    """
+                    INSERT INTO samples (file_hash, catalog_uuid, name, pack, label, pack_genre, tags,
+                        bpm, key, chord_type, duration_ms, category, licensed, preview_url,
+                        best_position, best_query, updated_at, pack_uuid, in_pack_position, in_pack_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+                    ON CONFLICT(file_hash) DO UPDATE SET
+                        catalog_uuid = excluded.catalog_uuid, name = excluded.name, pack = excluded.pack,
+                        label = excluded.label, pack_genre = excluded.pack_genre, tags = excluded.tags,
+                        bpm = excluded.bpm, key = excluded.key, chord_type = excluded.chord_type,
+                        duration_ms = excluded.duration_ms, category = excluded.category,
+                        licensed = MAX(samples.licensed, excluded.licensed),
+                        preview_url = excluded.preview_url, updated_at = excluded.updated_at,
+                        pack_uuid = excluded.pack_uuid,
+                        in_pack_position = MIN(COALESCE(samples.in_pack_position, excluded.in_pack_position),
+                                               excluded.in_pack_position),
+                        in_pack_count = excluded.in_pack_count
+                    """,
+                    (
+                        s.file_hash, s.catalog_uuid, s.name, s.pack, s.label, s.pack_genre,
+                        json.dumps(s.tags), s.bpm, s.key, s.chord_type, s.duration_ms, s.category,
+                        int(s.licensed), s.preview_url, UNRANKED, now, pack_uuid, first_position + index, count,
+                    ),
+                )
+
+    def assign(self, file_hash: str, group: str, genre: str, subtype: str) -> None:
+        """Make a sound a candidate for ``group`` x ``genre`` (so ``rows_for_group`` finds it)."""
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO sample_groups(file_hash, grp) VALUES (?, ?)", (file_hash, group))
+            self.db.execute(
+                "INSERT OR IGNORE INTO sample_genres(file_hash, grp, genre, subtype) VALUES (?, ?, ?, ?)",
+                (file_hash, group, genre, subtype),
+            )
+
+    def set_price(self, catalog_uuid: str, price: int) -> None:
+        with self.db:
+            self.db.execute("UPDATE samples SET price = ? WHERE catalog_uuid = ?", (price, catalog_uuid))
+
+    def upsert_packs(self, packs: list[Pack]) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self.db:
+            for p in packs:
+                self.db.execute(
+                    """
+                    INSERT INTO packs(uuid, name, main_genre, permalink, label, published_at, tags,
+                                      sample_count, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(uuid) DO UPDATE SET name = excluded.name, main_genre = excluded.main_genre,
+                        permalink = excluded.permalink, label = excluded.label,
+                        published_at = excluded.published_at, tags = excluded.tags,
+                        sample_count = excluded.sample_count, updated_at = excluded.updated_at
+                    """,
+                    (p.uuid, p.name, p.genre, p.permalink, p.label, p.published_at,
+                     json.dumps(p.tags), p.sample_count, now),
+                )
+
+    def set_pack_rank(self, pack_uuid: str, genre: str, all_time_rank: int, recent_rank: int | None) -> None:
+        with self.db:
+            self.db.execute(
+                """
+                INSERT INTO pack_ranks(pack_uuid, genre, all_time_rank, recent_rank) VALUES (?, ?, ?, ?)
+                ON CONFLICT(pack_uuid, genre) DO UPDATE SET all_time_rank = excluded.all_time_rank,
+                    recent_rank = excluded.recent_rank
+                """,
+                (pack_uuid, genre, all_time_rank, recent_rank),
+            )
+
+    def clear_pack_ranks(self, genre: str) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM pack_ranks WHERE genre = ?", (genre,))
+
+    def mark_pack_fetched(self, pack_uuid: str, at: datetime) -> None:
+        with self.db:
+            self.db.execute("UPDATE packs SET samples_fetched_at = ? WHERE uuid = ?",
+                            (at.isoformat(timespec="seconds"), pack_uuid))
+
+    def replace_chart_packs(self, scope: str, charted: list[ChartPack], at: datetime) -> None:
+        stamp = at.isoformat(timespec="seconds")
+        with self.db:
+            self.db.execute("DELETE FROM chart_packs WHERE scope = ?", (scope,))
+            self.db.executemany(
+                "INSERT OR REPLACE INTO chart_packs(scope, pack_uuid, name, label, position, last_position, fetched_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(scope, c.uuid, c.name, c.label, c.position, c.last_position, stamp) for c in charted],
+            )
+
+    def replace_chart_labels(self, charted: list[ChartLabel], at: datetime) -> None:
+        stamp = at.isoformat(timespec="seconds")
+        with self.db:
+            self.db.execute("DELETE FROM chart_labels")
+            self.db.executemany(
+                "INSERT OR REPLACE INTO chart_labels(uuid, name, permalink, position, last_position, pack_count,"
+                " tags, fetched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [(c.uuid, c.name, c.permalink, c.position, c.last_position, c.pack_count,
+                  json.dumps(c.tags), stamp) for c in charted],
+            )
+
+    # -- pack and chart reads -------------------------------------------------
+
+    def chart_fetched_at(self, scope: str | None) -> datetime | None:
+        """When chart ``scope`` ('global' or a label permalink; None means the labels chart) was stored."""
+        if scope is None:
+            row = self.db.execute("SELECT MAX(fetched_at) AS t FROM chart_labels").fetchone()
+        else:
+            row = self.db.execute("SELECT MAX(fetched_at) AS t FROM chart_packs WHERE scope = ?", (scope,)).fetchone()
+        return datetime.fromisoformat(row["t"]) if row["t"] else None
+
+    def chart_pack_rows(self) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM chart_packs ORDER BY scope, position").fetchall()
+
+    def chart_label_rows(self) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM chart_labels ORDER BY position").fetchall()
+
+    def pack_rows(self) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM packs ORDER BY name, uuid").fetchall()
+
+    def pack_rank_rows(self) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM pack_ranks ORDER BY genre, all_time_rank").fetchall()
+
+    def pack_fetched_at(self, pack_uuid: str) -> datetime | None:
+        row = self.db.execute("SELECT samples_fetched_at AS t FROM packs WHERE uuid = ?", (pack_uuid,)).fetchone()
+        return datetime.fromisoformat(row["t"]) if row and row["t"] else None
 
     # -- reads ----------------------------------------------------------------
 
@@ -260,8 +460,12 @@ class Catalog:
             category=r["category"],
             licensed=bool(r["licensed"]),
             preview_url=r["preview_url"],
+            pack_uuid=r["pack_uuid"],
         )
-        return CatalogRow(sample, r["best_position"], groups, r["local_path"], r["shortlisted_batch"], genres)
+        return CatalogRow(
+            sample, r["best_position"], groups, r["local_path"], r["shortlisted_batch"], genres,
+            r["in_pack_position"], r["in_pack_count"], r["price"],
+        )
 
     def rows_for_group(self, group: str, genre: str | None = None) -> list[CatalogRow]:
         if genre:

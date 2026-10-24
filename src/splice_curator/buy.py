@@ -132,6 +132,8 @@ def buy_one(run: BuyRun, row: CatalogRow, expected_price: int = 1) -> str | None
     except SpliceError as exc:
         return f"license check failed for {uuid}: {exc}"
     credits = run.credits
+    if files.price is not None:
+        catalog.set_price(uuid, files.price)
     if files.licensed:
         catalog.mark_licensed(uuid)
         catalog.log_purchase(uuid, "skipped_owned", credits, credits, when)
