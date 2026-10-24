@@ -15,6 +15,7 @@ PURCHASE_RESULTS = (
     "bought", "skipped_owned", "uncertain", "failed",
     "price_unknown", "price_mismatch",
     "not_bought",  # an uncertain purchase that Splice shows as not licensed
+    "check_failed",  # the license and price check failed; nothing was bought
 )
 
 SCHEMA = """
@@ -136,7 +137,8 @@ class Catalog:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path)
+        # Wait for a concurrent writer (for example `discover` during `autobuy run`) instead of failing.
+        self.db = sqlite3.connect(self.path, timeout=60)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
@@ -269,6 +271,34 @@ class Catalog:
                 (at.isoformat(timespec="seconds"), at.date().isoformat(), catalog_uuid, result,
                  credits_before, credits_after),
             )
+
+    def begin_purchase(self, catalog_uuid: str, credits_before: int | None, at: datetime) -> int:
+        """Log a purchase as `uncertain` before it is sent; return the log row id.
+
+        If the process dies before ``finish_purchase``, the next run resolves the row
+        with a read-only license check, so the purchase is never lost or repeated.
+        """
+        with self.db:
+            cur = self.db.execute(
+                "INSERT INTO purchases(at, day, catalog_uuid, result, credits_before, credits_after)"
+                " VALUES (?, ?, ?, 'uncertain', ?, NULL)",
+                (at.isoformat(timespec="seconds"), at.date().isoformat(), catalog_uuid, credits_before),
+            )
+        return cur.lastrowid
+
+    def finish_purchase(self, log_id: int, result: str, credits_after: int | None, at: datetime) -> None:
+        """Settle a ``begin_purchase`` row; a `bought` result also marks the sound licensed, in one transaction."""
+        if result not in PURCHASE_RESULTS:
+            raise ValueError(f"unknown purchase result {result!r}")
+        with self.db:
+            self.db.execute(
+                "UPDATE purchases SET result = ?, credits_after = ?, at = ?, day = ? WHERE id = ?",
+                (result, credits_after, at.isoformat(timespec="seconds"), at.date().isoformat(), log_id),
+            )
+            if result == "bought":
+                self.db.execute(
+                    "UPDATE samples SET licensed = 1 WHERE catalog_uuid ="
+                    " (SELECT catalog_uuid FROM purchases WHERE id = ?)", (log_id,))
 
     def record_pack_samples(self, samples: list[Sample], pack_uuid: str, first_position: int, count: int) -> None:
         """Upsert sounds found inside a pack; positions go to the in-pack columns only.

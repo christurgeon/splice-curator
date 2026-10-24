@@ -18,7 +18,7 @@ from .planfiles import estimate_bytes_per_sound, load_plan, save_plan, schedule_
 from .quality import build_context
 from .review import load_rejected
 from .runner import run_autobuy
-from .selection import AUTOBUY_SUFFIX, make_plan
+from .selection import AUTOBUY_SUFFIX, REJECTED_PREFIX, make_plan
 from .client import AuthRejected, SpliceClient, SpliceError
 from .config import DEFAULT_CONFIG_PATH, DELAY_KINDS, Config, Delay, load_config
 from .organize import run_organize
@@ -336,7 +336,7 @@ def cmd_autobuy_run(args, config: Config) -> int:
         confirm=args.confirm, max_credits=max_credits, daily_cap=config.max_purchases_per_day,
         staging=None if args.no_download else config.staging_dir, rejected=rejected,
         until_done=args.until_done, min_free_bytes=config.min_free_bytes,
-        max_price_skips=config.max_price_skips, log=_log,
+        max_price_skips=config.max_price_skips, log=_log, keep=config.keep,
     )
     report = result.buy
     if report.dry_run:
@@ -351,6 +351,8 @@ def cmd_autobuy_run(args, config: Config) -> int:
         return EXIT_OK
     for day, n in result.days:
         print(f"{day}: bought {n}")
+    if result.skipped_stale:
+        print(f"skipped {result.skipped_stale} sounds that left their planned batch during the run")
     print(f"bought {report.bought} ({report.credits_spent} credits), already owned {report.skipped_owned}, "
           f"left in plan {result.remaining}, credits {report.credits_before} -> {report.credits_after}")
     expected = None if report.credits_before is None else report.credits_before - report.credits_spent
@@ -372,7 +374,7 @@ def cmd_release(args, config: Config) -> int:
     catalog = Catalog(config.catalog_path)
     if args.rejected:
         uuids = load_rejected(Path(args.rejected))
-        tag = f"rejected-{Path(args.rejected).stem}"[:100]
+        tag = f"{REJECTED_PREFIX}{Path(args.rejected).stem}"[:100]
         print(f"rejected {catalog.reject(uuids, tag)} sounds; they leave their batches and are never planned again")
         return EXIT_OK
     if args.batch:

@@ -21,7 +21,8 @@ from .client import AuthRejected, PurchaseUncertain, RateLimited, SpliceClient, 
 from .review import load_approved
 from .sync import download_one
 
-CAP_REASONS = ("daily cap reached", "max credits for this run reached")
+KEEP_REACHED = "credits down to keep"
+CAP_REASONS = ("daily cap reached", "max credits for this run reached", KEEP_REACHED)
 LOCK_NAME = "buy.lock"
 AUDIT_EVERY = 25
 MAX_PRICE_SKIPS = 5
@@ -72,6 +73,7 @@ class BuyRun:
     audit_every: int = AUDIT_EVERY
     min_free_bytes: int = 0
     disk_usage: Callable = shutil.disk_usage
+    keep: int = 0  # never let the balance fall below this (autobuy passes config.keep)
     report: BuyReport = field(default_factory=lambda: BuyReport(0, 0, 0, [], None, False))
     _since_audit: int = 0
 
@@ -96,7 +98,16 @@ def resolve_uncertain(client: SpliceClient, catalog: Catalog, now: Callable[[], 
     return None
 
 
-def _audit(run: BuyRun) -> str | None:
+def _skip(run: BuyRun, uuid: str, result: str, when: datetime) -> str | None:
+    """Log a sound that was not bought and go on, or stop after ``max_price_skips`` skips."""
+    run.catalog.log_purchase(uuid, result, run.credits, run.credits, when)
+    run.report.price_skips += 1
+    if run.report.price_skips >= run.max_price_skips:
+        return f"stopped after {run.report.price_skips} skipped sounds (last: {result} for {uuid})"
+    return None
+
+
+def audit(run: BuyRun) -> str | None:
     try:
         actual = run.client.account().credits
     except AuthRejected as exc:
@@ -120,6 +131,8 @@ def buy_one(run: BuyRun, row: CatalogRow, expected_price: int = 1) -> str | None
         return "daily cap reached"
     if run.max_credits is not None and report.credits_spent + expected_price > run.max_credits:
         return "max credits for this run reached"
+    if run.keep and run.credits is not None and run.credits - expected_price < run.keep:
+        return KEEP_REACHED
     if run.staging is not None:
         staging = Path(run.staging)
         staging.mkdir(exist_ok=True)
@@ -129,8 +142,9 @@ def buy_one(run: BuyRun, row: CatalogRow, expected_price: int = 1) -> str | None
         files = client.asset_files(uuid)
     except (AuthRejected, RateLimited) as exc:
         return str(exc)
-    except SpliceError as exc:
-        return f"license check failed for {uuid}: {exc}"
+    except SpliceError:
+        # Nothing was bought (for example a sound removed from Splice): skip it, do not stop the run.
+        return _skip(run, uuid, "check_failed", when)
     credits = run.credits
     if files.price is not None:
         catalog.set_price(uuid, files.price)
@@ -140,31 +154,26 @@ def buy_one(run: BuyRun, row: CatalogRow, expected_price: int = 1) -> str | None
         report.skipped_owned += 1
         return None
     if files.price != expected_price:
-        result = "price_unknown" if files.price is None else "price_mismatch"
-        catalog.log_purchase(uuid, result, credits, credits, when)
-        report.price_skips += 1
-        if report.price_skips >= run.max_price_skips:
-            return f"stopped after {report.price_skips} price skips (last: {result} for {uuid})"
-        return None
+        return _skip(run, uuid, "price_unknown" if files.price is None else "price_mismatch", when)
     if credits is None:
         return "credit balance unknown"
     if credits < expected_price:
         return "out of credits"
 
+    attempt = catalog.begin_purchase(uuid, credits, when)  # stays `uncertain` if this process dies
     try:
         ok = client.purchase(uuid)
     except PurchaseUncertain as exc:
-        catalog.log_purchase(uuid, "uncertain", credits, None, when)
         report.uncertain.append(uuid)
         return f"purchase result uncertain for {uuid} ({exc}); check Splice before re-running"
     except AuthRejected as exc:
-        return str(exc)
+        return str(exc)  # the row stays `uncertain`; the next run checks it read-only
+    done = run.now()  # the day of the purchase itself counts toward the daily cap
     if not ok:
-        catalog.log_purchase(uuid, "failed", credits, credits, when)
+        catalog.finish_purchase(attempt, "failed", credits, done)
         return f"Splice did not license {uuid}; stopping"
 
-    catalog.mark_licensed(uuid)
-    catalog.log_purchase(uuid, "bought", credits, credits - expected_price, when)
+    catalog.finish_purchase(attempt, "bought", credits - expected_price, done)
     run.credits = credits - expected_price
     report.bought += 1
     report.credits_spent += expected_price
@@ -179,7 +188,7 @@ def buy_one(run: BuyRun, row: CatalogRow, expected_price: int = 1) -> str | None
             report.download_failed.append(uuid)  # `sync` will fetch it later
     if run._since_audit >= run.audit_every:
         run._since_audit = 0
-        return _audit(run)
+        return audit(run)
     return None
 
 

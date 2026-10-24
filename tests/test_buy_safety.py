@@ -92,7 +92,8 @@ def test_balance_audit_ok_continues(tmp_path, fake_client):
 
 def test_daily_cap_uses_clock_before_each_purchase(tmp_path, fake_client):
     samples, catalog, path = setup(tmp_path, fake_client, n=4)
-    clock = iter([datetime(2026, 10, 24, 23, 59)] +[datetime(2026, 10, 25, 0, 1)] * 50)
+    # first purchase: checked and completed at 23:59; the rest after midnight
+    clock = iter([datetime(2026, 10, 24, 23, 59)] * 2 + [datetime(2026, 10, 25, 0, 1)] * 50)
     report = buy(fake_client, catalog, path, daily_cap=1, now=lambda: next(clock))
     assert report.stopped_reason == "daily cap reached"
     assert report.bought == 2

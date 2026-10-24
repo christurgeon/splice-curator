@@ -57,7 +57,7 @@ def refresh_owned(client: SpliceClient, catalog: Catalog) -> int:
 def staging_path(staging: Path, name: str) -> Path:
     """Splice's pack path under ``staging``, each part made safe."""
     parts = [safe_part(p) for p in name.split("/") if p not in ("", ".", "..")]
-    return Path(staging).joinpath(*parts)
+    return Path(staging).joinpath(*(parts or ["_"]))  # never ``staging`` itself (its .partial would sit outside)
 
 
 def download_one(client: SpliceClient, catalog: Catalog, row: CatalogRow, staging: Path) -> Path:

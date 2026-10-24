@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from .buy import AUDIT_EVERY, MAX_PRICE_SKIPS, BuyReport, BuyRun, buy_lock, buy_one, resolve_uncertain
+from .buy import AUDIT_EVERY, MAX_PRICE_SKIPS, BuyReport, BuyRun, audit, buy_lock, buy_one, resolve_uncertain
 from .catalog import Catalog
 from .client import SpliceClient, SpliceError
 from .planfiles import PlanFile
@@ -26,6 +26,7 @@ DAY_CAP = "daily cap reached"
 class RunReport:
     buy: BuyReport
     skipped_rejected: int = 0
+    skipped_stale: int = 0  # left their planned batch during the run (released, re-planned, rejected)
     days: list[tuple[date, int]] = field(default_factory=list)  # (day, bought that day)
     remaining: int = 0  # plan sounds not yet owned when the run ended
 
@@ -65,6 +66,7 @@ def run_autobuy(
     audit_every: int = AUDIT_EVERY,
     disk_usage: Callable = shutil.disk_usage,
     log: Callable[[str], None] = lambda message: None,
+    keep: int = 0,
 ) -> RunReport:
     if daily_cap < 1:
         raise ValueError("daily cap must be at least 1")
@@ -83,14 +85,14 @@ def run_autobuy(
     with buy_lock(catalog.path.parent):
         run = BuyRun(client, catalog, daily_cap=daily_cap, max_credits=max_credits, staging=staging,
                      credits=credits, now=now, max_price_skips=max_price_skips, audit_every=audit_every,
-                     min_free_bytes=min_free_bytes, disk_usage=disk_usage)
+                     min_free_bytes=min_free_bytes, disk_usage=disk_usage, keep=keep)
         report = run.report
         report.planned = len(items)
         out = RunReport(report, skipped_rejected)
         report.stopped_reason = resolve_uncertain(client, catalog, now)
         if report.stopped_reason is None:
-            rows = _check_items(catalog, items)  # licensed flags may have changed
-            _loop(run, items, rows, out, until_done, now, sleep, log)
+            _check_items(catalog, items)
+            _loop(run, items, out, until_done, now, sleep, log)
         out.remaining = sum(1 for i in items if not catalog.get_by_catalog_uuid(i["catalog_uuid"]).sample.licensed)
         try:
             report.credits_after = client.account().credits
@@ -99,20 +101,31 @@ def run_autobuy(
     return out
 
 
-def _loop(run: BuyRun, items, rows, out: RunReport, until_done: bool, now, sleep, log) -> None:
+def _loop(run: BuyRun, items, out: RunReport, until_done: bool, now, sleep, log) -> None:
     report = run.report
     started, last_logged = now(), 0
     day_start, day_bought = now().date(), report.bought
     index = 0
     while index < len(items):
         item = items[index]
-        reason = buy_one(run, rows[item["catalog_uuid"]], item["price"])
+        # Re-read before each purchase: `release` or `autobuy plan --replace` may have run meanwhile.
+        row = run.catalog.get_by_catalog_uuid(item["catalog_uuid"])
+        if row is None or row.shortlisted_batch != item["batch_id"]:
+            out.skipped_stale += 1
+            log(f"skipped {item['catalog_uuid']}: no longer in batch {item['batch_id']}")
+            index += 1
+            continue
+        reason = buy_one(run, row, item["price"])
         if reason == DAY_CAP and until_done:
             out.days.append((day_start, report.bought - day_bought))
             log(f"{day_start}: bought {report.bought - day_bought}; credits left {run.credits}; "
                 f"{len(items) - index} sounds to go; waiting for the next day")
             sleep(seconds_until_midnight(now()))
             day_start, day_bought = now().date(), report.bought
+            run._since_audit = 0
+            if reason := audit(run):  # catch purchases made elsewhere during the wait
+                report.stopped_reason = reason
+                break
             continue  # same item again on the new day
         if reason:
             report.stopped_reason = reason

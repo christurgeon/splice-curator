@@ -18,6 +18,7 @@ from .config import Config
 from .quality import QualityContext, is_off_genre, Scored, is_excluded, loop_shape_ok, percentile, score_row
 from .rank import KEY_CAPPED_GROUPS, _genre_match, _pack_key, dup_key
 
+REJECTED_PREFIX = "rejected-"  # tag of sounds dropped with `release --rejected` (cli.cmd_release)
 AUTOBUY_SUFFIX = "-ab"  # batch ids of autobuy plans end with this; `release` and `--replace` use it
 SAMPLE_PRICE = 1
 
@@ -205,7 +206,9 @@ def make_plan(
     genres = config.genres
     counts = {(g.id, ge.id): catalog.batch_counts(g.id, ge.id) for g in GROUPS for ge in genres}
     bought_total = sum(b for b, _ in counts.values())
-    pending_total = sum(p for _, p in counts.values())
+    # Every unbought batch will spend credits, also manual ones without a genre; rejected tags will not.
+    pending_total = sum(n for b, n in catalog.pending_batches().items() if not b.startswith(REJECTED_PREFIX))
+    budget = max(0, spendable - pending_total)
     targets = _targets(config, spendable, bought_total)
     quotas = {g.id: genre_quotas(g, genres, targets[g.id]) for g in GROUPS}
     owned_keys = {(r.sample.basename.lower(), r.sample.duration_ms) for r in catalog.licensed_rows()}
@@ -218,6 +221,11 @@ def make_plan(
                 r for r in catalog.rows_for_group(group.id, genre.id) if _eligible(r, group, genre, ctx, owned_keys)
             ]
     remaining = {k: max(0, quotas[k[0]][k[1]] - sum(counts[k])) for k in cells}
+    if sum(remaining.values()) > budget:
+        # Cells already over quota (bought sounds) would otherwise let the other cells plan past the budget.
+        keys = sorted(remaining)
+        total = sum(remaining.values())
+        remaining = dict(zip(keys, _split(budget, [remaining[k] / total for k in keys])))
 
     # Scarce cells first, so popular packs do not hit the per-pack total before a thin group is served.
     order = sorted(cells, key=lambda k: (len(cells[k]) / max(1, remaining[k]), k))
@@ -256,7 +264,7 @@ def make_plan(
     ]
 
     if only_groups is None:
-        to_place = max(0, spendable - pending_total) - len(items)
+        to_place = budget - len(items)
     else:
         to_place = sum(c.quota for c in capacity) - len(items)
     unplaced, reason = 0, ""
