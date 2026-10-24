@@ -178,6 +178,7 @@ def cli_env(tmp_path, fake_client, monkeypatch):
         f'data_dir = "{tmp_path / "data"}"\n'
         f'staging_dir = "{tmp_path / "staging"}"\n'
         f'splice_dir = "{tmp_path / "Splice"}"\n'
+        'deadline = 2026-11-06\n'
     )
     monkeypatch.setattr(cli, "build_client", lambda config, source: fake_client)
     return cfg

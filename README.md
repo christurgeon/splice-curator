@@ -196,7 +196,7 @@ New config keys (all optional):
 
 ```toml
 keep = 200                  # credits left after the plan
-deadline = 2026-11-06       # your next charge date
+deadline = 2026-12-01       # optional: last day to buy (your next charge date)
 max_price_skips = 5
 recent_months = 30          # what counts as a recent pack
 packs_per_genre = 100

@@ -8,7 +8,7 @@ from splice_curator.config import DEFAULT_SCORING, load_config
 def test_autobuy_defaults():
     c = load_config(path=None)
     assert c.keep == 200
-    assert c.deadline == date(2026, 11, 6)
+    assert c.deadline is None
     assert c.recent_months == 30 and c.packs_per_genre == 100 and c.pack_pages == 8 and c.discovery_ttl_days == 7
     assert c.max_per_pack_per_group == 6 and c.max_per_pack_total == 25
     assert c.per_label_share == 0.15 and c.max_price_skips == 5

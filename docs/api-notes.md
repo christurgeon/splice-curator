@@ -21,7 +21,7 @@ pill).
   - `content-type` — assume `application/json`
   - `x-anonymous-id` — analytics anonymous ID. The tool generates one
     random UUID per install and stores it in the config file.
-- Owner's Chrome User-Agent (default for `Config.user_agent`):
+- Chrome User-Agent captured on macOS (default for `Config.user_agent`):
   `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36`
 - Cookies known by name: `_splice_token_prod` (session JWT, readable from
   JavaScript), `XSRF-TOKEN`. Send both when available. The cookie set sent

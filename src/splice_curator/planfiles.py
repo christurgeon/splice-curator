@@ -122,10 +122,12 @@ def schedule_lines(n: int, config: Config, today: date) -> list[str]:
     """Days needed, latest safe start, and the cap needed if behind."""
     cap = config.max_purchases_per_day
     days_needed = max(1, math.ceil(n / cap)) if n else 0
-    days_left = (config.deadline - today).days
     hours = n * BUYING_SECONDS_PER_SOUND / 3600
-    lines = [f"buying: {n} credits = {days_needed} buying days at {cap}/day (about {hours:.1f} h in all); "
-             f"deadline {config.deadline}, {days_left} days left"]
+    head = f"buying: {n} credits = {days_needed} buying days at {cap}/day (about {hours:.1f} h in all); "
+    if config.deadline is None:
+        return [head + "no deadline set"]
+    days_left = (config.deadline - today).days
+    lines = [head + f"deadline {config.deadline}, {days_left} days left"]
     start = config.deadline - timedelta(days=days_needed)
     lines.append(f"latest safe start: {start}" + (" (already passed)" if start < today else ""))
     if n and days_left < days_needed:

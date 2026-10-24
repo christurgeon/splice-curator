@@ -1,4 +1,4 @@
-"""Budget groups approved by the owner (spec 7.5).
+"""Default budget groups (credits per group; edit to fit your budget).
 
 Credits are fixed by the spec. Queries are a starting point; edit freely.
 """

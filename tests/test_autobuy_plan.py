@@ -118,7 +118,7 @@ def test_load_plan_validation(tmp_path):
 
 
 def test_schedule_lines_and_storage_estimate(tmp_path):
-    cfg = load_config(path=None)
+    cfg = load_config(path=None, overrides={"deadline": "2026-11-06"})
     lines = schedule_lines(800, cfg, date(2026, 10, 24))
     assert "2 buying days at 400/day" in lines[0] and "latest safe start: 2026-11-04" in lines[1]
     behind = schedule_lines(3000, cfg, date(2026, 11, 1))
@@ -136,3 +136,11 @@ def test_save_plan_marks_only_its_items(tmp_path):
     save_plan(w.cat, plan, w.cfg)
     assert sum(w.cat.pending_batches().values()) == plan.total == 100
     assert datetime(2026, 10, 24, 12, 0) == plan.created
+
+
+def test_schedule_without_deadline_shows_days_only():
+    from datetime import date
+    from splice_curator.config import load_config
+    from splice_curator.planfiles import schedule_lines
+    lines = schedule_lines(1000, load_config(path=None, overrides={"max_purchases_per_day": 500}), date(2026, 1, 1))
+    assert lines == ["buying: 1000 credits = 2 buying days at 500/day (about 5.3 h in all); no deadline set"]

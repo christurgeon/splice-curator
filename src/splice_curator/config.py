@@ -19,7 +19,6 @@ DEFAULT_USER_AGENT = (
 DELAY_KINDS = ("search", "account", "asset", "purchase", "download")
 _PATH_FIELDS = ("data_dir", "staging_dir", "splice_dir")
 _LIST_FIELDS = ("prefer_packs", "prefer_labels", "exclude_packs", "exclude_labels", "exclude_pack_patterns")
-DEFAULT_DEADLINE = date(2026, 11, 6)
 
 # Signal weights and penalties (spec 5.1). Edit under [scoring] in config.toml.
 DEFAULT_SCORING: dict[str, float] = {
@@ -87,7 +86,7 @@ class Config:
     genres: tuple[Genre, ...] = GENRES  # enabled genres only
     # autobuy
     keep: int = 200  # credits left unspent after the plan
-    deadline: date = DEFAULT_DEADLINE
+    deadline: date | None = None  # last day to buy; set it to your next charge date
     recent_months: int = 30
     packs_per_genre: int = 100
     pack_pages: int = 8  # pages of 50 packs read per genre prefix
