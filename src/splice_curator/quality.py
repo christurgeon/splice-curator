@@ -65,6 +65,7 @@ class QualityContext:
     prefer_labels: frozenset[str] = frozenset()
     exclude_packs: frozenset[str] = frozenset()
     exclude_labels: frozenset[str] = frozenset()
+    exclude_pack_patterns: tuple[str, ...] = ()  # lowercase substrings of pack names
 
     def pack_uuid(self, sample: Sample) -> str | None:
         if sample.pack_uuid:
@@ -96,6 +97,7 @@ def build_context(catalog: Catalog, config: Config, today: datetime | None = Non
         weights=dict(config.scoring), today=today or datetime.now(),
         prefer_packs=_lower_set(config.prefer_packs), prefer_labels=_lower_set(config.prefer_labels),
         exclude_packs=_lower_set(config.exclude_packs), exclude_labels=_lower_set(config.exclude_labels),
+        exclude_pack_patterns=tuple(p.lower() for p in config.exclude_pack_patterns if p.strip()),
     )
     for r in catalog.pack_rows():
         ctx.pack_by_name[((r["name"] or "").lower(), (r["label"] or "").lower())] = r["uuid"]
@@ -128,8 +130,15 @@ def _text(sample: Sample) -> str:
     return " ".join(_TOKEN.findall(f"{sample.basename} {' '.join(sample.tag_labels)}".lower()))
 
 
+def pack_name_matches(name: str | None, patterns) -> bool:
+    """True if the pack name contains any of ``patterns`` (case-insensitive substrings)."""
+    lowered = (name or "").lower()
+    return any(p.strip() and p.strip().lower() in lowered for p in patterns)
+
+
 def is_excluded(sample: Sample, ctx: QualityContext) -> bool:
-    return (sample.pack or "").lower() in ctx.exclude_packs or (sample.label or "").lower() in ctx.exclude_labels
+    return (sample.pack or "").lower() in ctx.exclude_packs or (sample.label or "").lower() in ctx.exclude_labels \
+        or pack_name_matches(sample.pack, ctx.exclude_pack_patterns)
 
 
 def loop_shape_ok(sample: Sample) -> bool:

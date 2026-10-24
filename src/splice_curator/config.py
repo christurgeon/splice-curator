@@ -18,7 +18,7 @@ DEFAULT_USER_AGENT = (
 )
 DELAY_KINDS = ("search", "account", "asset", "purchase", "download")
 _PATH_FIELDS = ("data_dir", "staging_dir", "splice_dir")
-_LIST_FIELDS = ("prefer_packs", "prefer_labels", "exclude_packs", "exclude_labels")
+_LIST_FIELDS = ("prefer_packs", "prefer_labels", "exclude_packs", "exclude_labels", "exclude_pack_patterns")
 DEFAULT_DEADLINE = date(2026, 11, 6)
 
 # Signal weights and penalties (spec 5.1). Edit under [scoring] in config.toml.
@@ -106,6 +106,8 @@ class Config:
     prefer_labels: list[str] = field(default_factory=list)
     exclude_packs: list[str] = field(default_factory=list)
     exclude_labels: list[str] = field(default_factory=list)
+    # Case-insensitive substrings of pack names to leave out (mixed-style mega packs).
+    exclude_pack_patterns: list[str] = field(default_factory=lambda: ["Sounds of KSHMR"])
 
     @property
     def catalog_path(self) -> Path:

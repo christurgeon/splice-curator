@@ -118,6 +118,9 @@ def test_prefer_and_exclude():
     assert score(row(), c=c).why["prefer_bonus"] == 0.3
     assert is_excluded(make_sample(1), c)
     assert not is_excluded(make_sample(1, pack="Other", label="Other"), c)
+    kshmr = ctx(exclude_pack_patterns=("sounds of kshmr",))
+    assert is_excluded(make_sample(1, pack="Sounds of KSHMR Vol 5 - FX"), kshmr)
+    assert not is_excluded(make_sample(1, pack="KSHMR Essentials"), kshmr)
 
 
 def test_weights_are_configurable():
@@ -165,7 +168,7 @@ def test_build_context_reads_catalog(tmp_path):
     assert c.chart_packs[PACK] == [(7, 9)] and c.chart_labels["label a"] == (3, 3)
     assert c.pack_tags[PACK] == {"groovy"} and c.pack_published[PACK].year == 2026
     assert c.owned_packs[PACK] == 3 and c.owned_labels["label a"] == 3
-    assert c.prefer_labels == {"label a"}
+    assert c.prefer_labels == {"label a"} and c.exclude_pack_patterns == ("sounds of kshmr",)
     s = make_sample(9, pack_uuid=None)
     assert c.pack_uuid(s) == PACK
 

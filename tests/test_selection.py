@@ -49,6 +49,7 @@ class World:
         c = QualityContext(weights=dict(self.cfg.scoring), today=NOW)
         c.pack_ranks = dict(self.ranks)
         c.exclude_labels = frozenset(x.lower() for x in self.cfg.exclude_labels)
+        c.exclude_pack_patterns = tuple(x.lower() for x in self.cfg.exclude_pack_patterns)
         return c
 
     def plan(self, balance, **kw):
@@ -321,3 +322,14 @@ def test_plan_wide_label_cap_holds_when_credits_cannot_all_be_placed(tmp_path):
     labels = Counter(i.row.sample.label for i in plan.items)
     assert plan.unplaced == 1000 - plan.total > 0 and "caps" in plan.unplaced_reason
     assert labels["Big Label"] <= max(1, 0.12 * plan.total)
+
+
+def test_pack_name_patterns_are_not_candidates(tmp_path):
+    w = World(tmp_path, max_label_share_total=1.0)
+    for p in range(1, 4):
+        w.add("kicks", pack=p, n=3)
+    w.cat.db.execute("UPDATE samples SET pack = 'Sounds of KSHMR Vol 5 - Drums' WHERE pack = 'Pack 1'")
+    w.cat.db.execute("UPDATE samples SET pack = 'sounds of kshmr vol 2' WHERE pack = 'Pack 2'")
+    w.cat.db.commit()
+    plan = w.plan(balance=100)
+    assert plan.items and {i.row.sample.pack for i in plan.items} == {"Pack 3"}

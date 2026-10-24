@@ -13,6 +13,7 @@ def test_autobuy_defaults():
     assert c.max_per_pack_per_group == 6 and c.max_per_pack_total == 25
     assert c.per_label_share == 0.15 and c.max_price_skips == 5
     assert c.max_label_share_total == 0.12
+    assert c.exclude_pack_patterns == ["Sounds of KSHMR"]
     assert c.scoring == DEFAULT_SCORING and c.scoring is not DEFAULT_SCORING
     assert c.prefer_packs == [] and c.exclude_labels == []
 
@@ -21,11 +22,13 @@ def test_autobuy_keys_load_from_toml(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text(
         'keep = 100\ndeadline = 2026-11-10\nprefer_labels = ["Solid Grooves"]\n'
-        'exclude_packs = ["Bad Pack"]\n\n[scoring]\nin_pack_pop = 2.0\n'
+        'exclude_packs = ["Bad Pack"]\nexclude_pack_patterns = []\nmax_label_share_total = 0.2\n'
+        '\n[scoring]\nin_pack_pop = 2.0\n'
     )
     c = load_config(path=path)
     assert c.keep == 100 and c.deadline == date(2026, 11, 10)
     assert c.prefer_labels == ["Solid Grooves"] and c.exclude_packs == ["Bad Pack"]
+    assert c.exclude_pack_patterns == [] and c.max_label_share_total == 0.2
     assert c.scoring["in_pack_pop"] == 2.0 and c.scoring["query_pop"] == 0.6
     assert DEFAULT_SCORING["in_pack_pop"] == 1.0
 

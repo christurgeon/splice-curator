@@ -18,7 +18,7 @@ from .client import AuthRejected, SpliceClient, SpliceError
 from .config import Config
 from .models import ChartPack, Pack, Sample
 from .organize import classify
-from .quality import is_off_genre
+from .quality import is_off_genre, pack_name_matches
 
 HOUSE_WORDS = ("house", "techno", "disco", "groove")
 GROUP_FOR = {
@@ -189,7 +189,8 @@ class Discoverer:
                 for pack in result.packs:
                     rank += 1
                     if _off_genre(pack) or _listed(cfg.exclude_packs, pack.name) \
-                            or _listed(cfg.exclude_labels, pack.label):
+                            or _listed(cfg.exclude_labels, pack.label) \
+                            or pack_name_matches(pack.name, cfg.exclude_pack_patterns):
                         continue
                     found.setdefault(pack.uuid, pack)
                     best_all[pack.uuid] = min(best_all.get(pack.uuid, rank), rank)
