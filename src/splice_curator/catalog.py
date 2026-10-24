@@ -256,11 +256,15 @@ class Catalog:
         )
 
     def count_spent(self, group: str, genre: str) -> int:
-        """Rows found for this group and genre that are licensed or shortlisted."""
+        """Rows shortlisted in a batch for this group and genre (bought or not).
+
+        Genres overlap, so a sound counts only against the genre of the batch that
+        picked it, never against every genre whose searches found it.
+        """
+        prefix = f"{group}-{genre}-"
         (count,) = self.db.execute(
-            "SELECT COUNT(*) FROM samples WHERE (licensed = 1 OR shortlisted_batch IS NOT NULL)"
-            " AND file_hash IN (SELECT file_hash FROM sample_genres WHERE grp = ? AND genre = ?)",
-            (group, genre),
+            "SELECT COUNT(*) FROM samples WHERE substr(shortlisted_batch, 1, ?) = ?",
+            (len(prefix), prefix),
         ).fetchone()
         return count
 

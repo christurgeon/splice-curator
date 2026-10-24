@@ -169,8 +169,9 @@ def cmd_quota(args, config: Config) -> int:
     table = [header]
     for genre in config.genres:
         rows = catalog.rows_for_group(group.id, genre.id)
-        bought = sum(1 for r in rows if r.sample.licensed)
-        shortlisted = sum(1 for r in rows if r.shortlisted_batch and not r.sample.licensed)
+        picked = [r for r in rows if (r.shortlisted_batch or "").startswith(f"{group.id}-{genre.id}-")]
+        bought = sum(1 for r in picked if r.sample.licensed)
+        shortlisted = len(picked) - bought
         remaining = max(0, quotas[genre.id] - catalog.count_spent(group.id, genre.id))
         table.append((genre.id, *map(str, (quotas[genre.id], len(rows), shortlisted, bought, remaining))))
     widths = [max(len(row[i]) for row in table) for i in range(len(header))]

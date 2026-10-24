@@ -127,12 +127,13 @@ def test_quota_command_table(tmp_path, fake_client, cli_env, capsys):
     samples = [make_sample(i) for i in range(1, 5)]
     cat.record_search(samples, "q", "kicks", 1, 50, genre="classic_house", subtype="kick")
     cat.mark_shortlisted([samples[0].catalog_uuid, samples[1].catalog_uuid], "kicks-classic_house-1")
-    cat.mark_licensed(samples[2].catalog_uuid)
+    cat.mark_licensed(samples[1].catalog_uuid)
+    cat.mark_licensed(samples[2].catalog_uuid)  # bought outside a genre batch: not counted
     capsys.readouterr()
     assert cli.main(["--config", str(cli_env), "quota", "--group", "kicks"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert fake_client.calls == []
     assert lines[0].split() == ["genre", "quota", "searched", "shortlisted", "bought", "remaining"]
     assert lines[1].split() == ["tech_house", "120", "0", "0", "0", "120"]
-    assert lines[-1].split() == ["classic_house", "30", "4", "2", "1", "27"]
+    assert lines[-1].split() == ["classic_house", "30", "4", "1", "1", "28"]
     assert len(lines) == 6

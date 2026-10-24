@@ -127,6 +127,17 @@ def test_count_spent(tmp_path):
     cat.record_search(samples, "q", "kicks", 1, 50, genre="tech_house", subtype="kick")
     assert cat.count_spent("kicks", "tech_house") == 0
     cat.mark_shortlisted([samples[0].catalog_uuid, samples[1].catalog_uuid], "kicks-tech_house-1")
-    cat.mark_licensed(samples[2].catalog_uuid)
-    assert cat.count_spent("kicks", "tech_house") == 3
-    assert cat.count_spent("kicks", "minimal") == 0
+    cat.mark_licensed(samples[1].catalog_uuid)
+    cat.mark_licensed(samples[2].catalog_uuid)  # bought outside a genre batch: counts for no genre
+    assert cat.count_spent("kicks", "tech_house") == 2
+
+
+def test_count_spent_charges_only_the_batch_genre(tmp_path):
+    # Genres overlap (minimal searches also find tech house sounds); a pick must count once.
+    cat = Catalog(tmp_path / "c.sqlite")
+    s = make_sample(1)
+    cat.record_search([s], "q1", "kicks", 1, 50, genre="tech_house", subtype="kick")
+    cat.record_search([s], "q2", "kicks", 1, 50, genre="minimal", subtype="kick")
+    cat.mark_shortlisted([s.catalog_uuid], "kicks-minimal-20261023-200000")
+    assert cat.count_spent("kicks", "minimal") == 1
+    assert cat.count_spent("kicks", "tech_house") == 0
