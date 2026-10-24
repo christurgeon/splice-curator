@@ -216,6 +216,8 @@ def cmd_buy(args, config: Config) -> int:
         daily_cap=config.max_purchases_per_day,
         today=date.today(),
         staging=None if args.no_download else config.staging_dir,
+        min_free_bytes=config.min_free_bytes,
+        max_price_skips=config.max_price_skips,
     )
     if report.dry_run:
         needed = report.planned - report.skipped_owned
@@ -226,9 +228,9 @@ def cmd_buy(args, config: Config) -> int:
         print(f"bought today: {catalog.purchases_on(date.today())} of {config.max_purchases_per_day}")
         print("dry run: no credits spent (add --confirm to buy)")
         return EXIT_OK
-    print(f"bought {report.bought}, already owned {report.skipped_owned}, "
+    print(f"bought {report.bought} ({report.credits_spent} credits), already owned {report.skipped_owned}, "
           f"credits {report.credits_before} -> {report.credits_after}")
-    expected = None if report.credits_before is None else report.credits_before - report.bought
+    expected = None if report.credits_before is None else report.credits_before - report.credits_spent
     if report.credits_after is not None and expected is not None and report.credits_after != expected:
         print(f"warning: expected {expected} credits left, Splice reports {report.credits_after}", file=sys.stderr)
     for uuid in report.download_failed:

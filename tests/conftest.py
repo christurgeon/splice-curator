@@ -78,6 +78,8 @@ class FakeClient:
         self.owned: set[str] = set()
         self.per_page = 2
         self.errors: dict[tuple[str, str], Exception] = {}  # (method, catalog_uuid) -> exc
+        self.prices: dict[str, int | None] = {}  # catalog_uuid -> price (default 1)
+        self.credit_drift = 0  # extra credits the server takes per purchase
         self.account_error: Exception | None = None
         self.search_error: Exception | None = None
         self.download_error: Exception | None = None
@@ -124,14 +126,14 @@ class FakeClient:
         s = self.store[catalog_uuid]
         owned = catalog_uuid in self.owned
         src = f"https://spliceproduction.s3.us-west-1.amazonaws.com/audio_samples/{s.file_hash}" if owned else None
-        return AssetFiles(s.name, owned, s.preview_url, src)
+        return AssetFiles(s.name, owned, s.preview_url, src, self.prices.get(catalog_uuid, 1))
 
     def purchase(self, catalog_uuid):
         self.calls.append(("purchase", catalog_uuid))
         self._raise("purchase", catalog_uuid)
         if self.credits < 1:
             raise PurchaseUncertain("no credits")
-        self.credits -= 1
+        self.credits -= (self.prices.get(catalog_uuid) or 1) + self.credit_drift
         self.owned.add(catalog_uuid)
         return True
 

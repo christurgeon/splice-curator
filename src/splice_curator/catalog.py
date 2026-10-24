@@ -11,7 +11,11 @@ from pathlib import Path
 from .models import Sample
 
 UNRANKED = 10**9  # position for rows not found by a ranked search
-PURCHASE_RESULTS = ("bought", "skipped_owned", "uncertain", "failed")
+PURCHASE_RESULTS = (
+    "bought", "skipped_owned", "uncertain", "failed",
+    "price_unknown", "price_mismatch",
+    "not_bought",  # an uncertain purchase that Splice shows as not licensed
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS samples (
@@ -195,6 +199,20 @@ class Catalog:
             "SELECT COUNT(*) FROM purchases WHERE day = ? AND result = 'bought'", (day.isoformat(),)
         ).fetchone()
         return count
+
+    def unresolved_uncertain(self) -> list[str]:
+        """Sounds with an `uncertain` purchase log row and no later outcome, not known as owned."""
+        rows = self.db.execute(
+            """
+            SELECT DISTINCT p.catalog_uuid FROM purchases p
+            JOIN samples s ON s.catalog_uuid = p.catalog_uuid
+            WHERE p.result = 'uncertain' AND s.licensed = 0
+              AND NOT EXISTS (SELECT 1 FROM purchases q WHERE q.catalog_uuid = p.catalog_uuid
+                              AND q.id > p.id AND q.result IN ('bought', 'skipped_owned', 'not_bought'))
+            ORDER BY p.id
+            """
+        ).fetchall()
+        return [r["catalog_uuid"] for r in rows]
 
     def _rows(self, where: str, params: tuple, genre_group: str | None = None) -> list[CatalogRow]:
         rows = self.db.execute(

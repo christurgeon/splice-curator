@@ -49,6 +49,7 @@ class Config:
     max_purchases_per_run: int | None = None
     pause_every: int = 50
     pause_seconds: float = 60.0
+    max_price_skips: int = 5
     max_tries: int = 4
     backoff_base_s: float = 5.0
     min_free_bytes: int = 2 * 1024**3

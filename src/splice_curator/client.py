@@ -118,6 +118,19 @@ def _parse_sample(item: dict) -> Sample:
     )
 
 
+def _parse_price(prices) -> int | None:
+    """Whole credits from an ``asset_prices`` list, or None if absent or odd."""
+    for entry in prices or []:
+        if not isinstance(entry, dict) or str(entry.get("currency", "")).strip().lower() not in ("credit", "credits"):
+            continue
+        try:
+            amount = float(entry.get("amount"))
+        except (TypeError, ValueError):
+            return None
+        return int(amount) if amount == int(amount) and amount >= 0 else None
+    return None
+
+
 class SpliceClient:
     def __init__(
         self,
@@ -314,6 +327,7 @@ class SpliceClient:
             licensed=bool(asset.get("licensed")),
             preview_url=files.get("preview_mp3"),
             source_url=files.get("source"),
+            price=_parse_price(asset.get("asset_prices")),
         )
 
     def purchase(self, catalog_uuid: str) -> bool:

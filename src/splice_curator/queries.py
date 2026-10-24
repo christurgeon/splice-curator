@@ -44,6 +44,7 @@ ASSET_FILES = Template("""query AssetFiles {
     ... on SampleAsset {
       name
       licensed
+      asset_prices { amount currency }
       files(includeSource: true) { asset_file_type_slug url }
     }
   }

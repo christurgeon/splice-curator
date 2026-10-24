@@ -44,6 +44,7 @@ class AssetFiles:
     licensed: bool
     preview_url: str | None
     source_url: str | None = field(repr=False)  # signed URL; keep out of logs
+    price: int | None = None  # credits; None when missing or not a whole number of credits
 
 
 @dataclass
