@@ -18,11 +18,8 @@ from .client import AuthRejected, SpliceClient, SpliceError
 from .config import Config
 from .models import ChartPack, Pack, Sample
 from .organize import classify
+from .quality import OFF_GENRES
 
-OFF_GENRES = frozenset({
-    "trap", "hip hop", "hip-hop", "dubstep", "drum and bass", "drum & bass", "drum n bass", "dnb",
-    "future bass", "lo-fi", "lofi", "pop", "rock", "metal", "country", "reggaeton", "r&b", "edm trap",
-})
 HOUSE_WORDS = ("house", "techno", "disco", "groove")
 GROUP_FOR = {
     ("One-Shots", "Kicks"): "kicks",
