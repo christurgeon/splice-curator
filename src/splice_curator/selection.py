@@ -15,7 +15,7 @@ from datetime import datetime
 from .budget import GROUPS, RESERVE, Genre, Group, _split, genre_quotas, subtype_quotas
 from .catalog import UNRANKED, Catalog, CatalogRow
 from .config import Config
-from .quality import QualityContext, Scored, is_excluded, loop_shape_ok, percentile, score_row
+from .quality import QualityContext, is_off_genre, Scored, is_excluded, loop_shape_ok, percentile, score_row
 from .rank import KEY_CAPPED_GROUPS, _genre_match, _pack_key, dup_key
 
 AUTOBUY_SUFFIX = "-ab"  # batch ids of autobuy plans end with this; `release` and `--replace` use it
@@ -88,7 +88,7 @@ def _eligible(row: CatalogRow, group: Group, genre: Genre, ctx: QualityContext, 
     s = row.sample
     if s.licensed or row.shortlisted_batch is not None or s.category != group.category:
         return False
-    if is_excluded(s, ctx) or (s.basename.lower(), s.duration_ms) in owned_keys:
+    if is_off_genre(s.pack_genre) or is_excluded(s, ctx) or (s.basename.lower(), s.duration_ms) in owned_keys:
         return False
     if row.in_pack_position is None and not _genre_match(s, genre):
         return False
@@ -219,20 +219,24 @@ def make_plan(
             ]
     remaining = {k: max(0, quotas[k[0]][k[1]] - sum(counts[k])) for k in cells}
 
+    # Scarce cells first, so popular packs do not hit the per-pack total before a thin group is served.
+    order = sorted(cells, key=lambda k: (len(cells[k]) / max(1, remaining[k]), k))
+
     def run(kit_packs: dict[str, set[str]] | None):
         state = _State(config, targets)
         scored_cells: dict[tuple[str, str], list[Scored]] = {}
         picked_cells: dict[tuple[str, str], list[Scored]] = {}
-        for group in plan_groups:
-            for genre in genres:
-                key = (group.id, genre.id)
-                pool = [
-                    score_row(r, group.id, genre.id, ctx,
-                              kit=bool(kit_packs) and len(kit_packs.get(_pack_key(r.sample), set()) - {group.id}) >= 2)
-                    for r in cells[key]
-                ]
-                scored_cells[key] = pool
-                picked_cells[key] = _fill_cell(pool, remaining[key], group, genre, state)
+        groups = {g.id: g for g in plan_groups}
+        genre_by_id = {g.id: g for g in genres}
+        for key in order:
+            group, genre = groups[key[0]], genre_by_id[key[1]]
+            pool = [
+                score_row(r, group.id, genre.id, ctx,
+                          kit=bool(kit_packs) and len(kit_packs.get(_pack_key(r.sample), set()) - {group.id}) >= 2)
+                for r in cells[key]
+            ]
+            scored_cells[key] = pool
+            picked_cells[key] = _fill_cell(pool, remaining[key], group, genre, state)
         return state, scored_cells, picked_cells
 
     _, _, pass1 = run(None)

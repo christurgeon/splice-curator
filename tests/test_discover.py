@@ -196,3 +196,11 @@ def test_group_and_subtype_inference():
     assert group_for(other) is None
     loop = make_sample(10, category="loop", tags=[("drums", None)], bpm=126)
     assert group_for(loop).id == "drum_loops"
+
+
+def test_pack_pages_limits_pack_search(tmp_path, cfg):
+    packs = [make_pack(i) for i in range(1, 121)]
+    client = FakeDiscoveryClient({"tech house": packs})
+    cfg.pack_pages = 2
+    run_discover(client, Catalog(tmp_path / "c.sqlite"), cfg, now=lambda: NOW)
+    assert [c[2] for c in client.calls if c[0] == "pack_search"] == [1, 2]

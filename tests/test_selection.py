@@ -276,3 +276,11 @@ def test_release_leaves_manual_batches_and_bought_sounds(tmp_path):
     assert w.cat.get_by_catalog_uuid(c.sample.catalog_uuid).shortlisted_batch.endswith("-ab")
     assert w.cat.release_pending(batch_id="kicks-tech_house-20261023-200420") == 1
     assert w.cat.pending_batches() == {}
+
+
+def test_off_genre_packs_are_not_candidates(tmp_path):
+    w = World(tmp_path)
+    w.add("kicks", pack=1, n=3)
+    w.add("kicks", pack=2, n=3, pack_genre="rnb")
+    plan = w.plan(balance=100)
+    assert plan.total > 0 and all(i.row.sample.pack_genre == "tech house" for i in plan.items)

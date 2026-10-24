@@ -168,3 +168,15 @@ def test_build_context_reads_catalog(tmp_path):
     assert c.prefer_labels == {"label a"}
     s = make_sample(9, pack_uuid=None)
     assert c.pack_uuid(s) == PACK
+
+
+@pytest.mark.parametrize("genre, off", [
+    ("tech house", False), ("deep house", False), ("nu disco", False), ("minimal techno", False),
+    ("bass house", False), ("house", False), (None, False), ("", False),
+    ("rnb", True), ("soul", True), ("cinematic", True), ("trap", True), ("uk garage", True),
+    ("hard techno", True), ("hyper techno", True), ("afropop & afrobeats", True), ("drums", False), ("edm", False),
+])
+def test_is_off_genre(genre, off):
+    from splice_curator.quality import is_off_genre
+
+    assert is_off_genre(genre) is off

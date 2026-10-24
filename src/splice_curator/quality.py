@@ -20,6 +20,13 @@ OFF_GENRES = frozenset({
     "trap", "hip hop", "hip-hop", "dubstep", "drum and bass", "drum & bass", "drum n bass", "dnb",
     "future bass", "lo-fi", "lofi", "pop", "rock", "metal", "country", "reggaeton", "r&b", "edm trap",
 })
+# A pack's main genre must contain one of these words (calibration 2026-10-24: a blocklist let rnb,
+# soul, cinematic and similar packs through) and none of the words in HARD_WORDS.
+ALLOWED_GENRE_WORDS = (
+    "house", "techno", "disco", "minimal", "funk", "groove", "edm", "electronic", "dance",
+    "drums", "percussion", "fx", "vocal", "bass", "loops",  # generic kit packs have no style genre
+)
+HARD_WORDS = ("hard techno", "hyper", "hardstyle", "hardcore")
 SONIC_TAGS = frozenset({"groovy", "punchy", "dry", "swing", "shuffle", "tight"})
 LOOP_JUNK = frozenset({"riser", "build", "buildup", "fill", "fills", "reverse", "reversed"})
 BAD_WORDS = frozenset({"808", "trap"})
@@ -30,6 +37,16 @@ CHART_SIZE = 50
 FRESH_MONTHS = 24
 OWNER_MIN = 3
 _TOKEN = re.compile(r"[a-z0-9]+")
+
+
+def is_off_genre(pack_genre: str | None) -> bool:
+    """True for a pack whose main genre is clearly not house-family. An unknown genre is not off-genre."""
+    g = (pack_genre or "").strip().lower()
+    if not g:
+        return False
+    if g in OFF_GENRES or any(w in g for w in HARD_WORDS):
+        return True
+    return not any(w in g for w in ALLOWED_GENRE_WORDS)
 
 
 @dataclass
@@ -160,7 +177,7 @@ def signals(row: CatalogRow, group_id: str, genre_id: str, ctx: QualityContext, 
     pack_tags = ctx.pack_tags.get(pack, set()) if pack else set()
     out["sonic_bonus"] = 1.0 if (s.tag_labels | pack_tags) & SONIC_TAGS else 0.0
 
-    off_genre = (s.pack_genre or "").lower() in OFF_GENRES
+    off_genre = is_off_genre(s.pack_genre)
     if not off_genre:
         if (pack and ctx.owned_packs[pack] >= OWNER_MIN):
             out["owner_affinity"] = 1.0

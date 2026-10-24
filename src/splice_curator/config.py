@@ -89,7 +89,8 @@ class Config:
     keep: int = 200  # credits left unspent after the plan
     deadline: date = DEFAULT_DEADLINE
     recent_months: int = 30
-    packs_per_genre: int = 60
+    packs_per_genre: int = 100
+    pack_pages: int = 8  # pages of 50 packs read per genre prefix
     discovery_ttl_days: int = 7
     chart_ttl_days: int = 7
     chart_labels: int = 15  # labels whose own pack chart is fetched

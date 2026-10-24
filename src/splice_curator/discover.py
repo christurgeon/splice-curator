@@ -18,7 +18,7 @@ from .client import AuthRejected, SpliceClient, SpliceError
 from .config import Config
 from .models import ChartPack, Pack, Sample
 from .organize import classify
-from .quality import OFF_GENRES
+from .quality import is_off_genre
 
 HOUSE_WORDS = ("house", "techno", "disco", "groove")
 GROUP_FOR = {
@@ -101,7 +101,7 @@ def _is_recent(pack: Pack, today: datetime, months: int) -> bool:
 
 
 def _off_genre(pack: Pack) -> bool:
-    return (pack.genre or "").lower() in OFF_GENRES
+    return is_off_genre(pack.genre)
 
 
 def _listed(names: list[str], *values: str | None) -> bool:
@@ -183,7 +183,7 @@ class Discoverer:
         found: dict[str, Pack] = {}
         for prefix in genre.prefixes:
             rank = recent_rank = 0
-            for page in range(1, 4):
+            for page in range(1, cfg.pack_pages + 1):
                 self._count("pack_search")
                 result = self.client.pack_search(prefix, page, limit=50)
                 for pack in result.packs:
