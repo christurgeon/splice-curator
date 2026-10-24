@@ -19,7 +19,7 @@ from .quality import build_context
 from .review import load_rejected
 from .runner import run_autobuy
 from .selection import AUTOBUY_SUFFIX, REJECTED_PREFIX, make_plan
-from .client import AuthRejected, SpliceClient, SpliceError
+from .client import AuthRejected, SpliceClient, SpliceError, open_splice_in_chrome
 from .config import DEFAULT_CONFIG_PATH, DELAY_KINDS, Config, Delay, load_config
 from .organize import run_organize
 from .rank import build_genre_shortlist, build_shortlist
@@ -39,7 +39,8 @@ def build_client(config: Config, source: str) -> SpliceClient:
         backoff_base_s=config.backoff_base_s,
     )
     refresher = (lambda: load_session("chrome", time.time(), COOKIE_NAMES)) if source == "chrome" else None
-    return SpliceClient(session, throttle, config, refresher=refresher)
+    opener = open_splice_in_chrome if source == "chrome" and sys.platform == "darwin" else None
+    return SpliceClient(session, throttle, config, refresher=refresher, opener=opener)
 
 
 def _parse_delay(text: str) -> tuple[str, Delay]:

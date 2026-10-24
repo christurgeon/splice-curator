@@ -23,7 +23,7 @@ class Env:
     The refresher returns the scripted items in order, then repeats the last one.
     """
 
-    def __init__(self, config, initial, refreshes=(), handler=None, with_refresher=True):
+    def __init__(self, config, initial, refreshes=(), handler=None, with_refresher=True, opener=None):
         self.now = NOW
         self.sleeps: list[float] = []
         self.refresher_calls = 0
@@ -37,6 +37,7 @@ class Env:
             transport=httpx.MockTransport(self._handle),
             refresher=self._refresh if with_refresher else None,
             clock=lambda: self.now,
+            opener=opener,
         )
 
     def _sleep(self, seconds):
@@ -213,3 +214,98 @@ def test_config_refresh_defaults(tmp_path):
     path.write_text("refresh_margin_s = 60\nrefresh_poll_s = 5\nrefresh_wait_s = 120\n")
     cfg = load_config(path)
     assert (cfg.refresh_margin_s, cfg.refresh_poll_s, cfg.refresh_wait_s) == (60, 5, 120)
+
+
+class Opener:
+    """Records when the client asks Chrome to load splice.com; optionally makes the refresher renew after that."""
+
+    def __init__(self):
+        self.times: list[float] = []
+        self.env = None
+
+    def __call__(self):
+        self.times.append(self.env.now)
+
+
+def test_opener_runs_once_after_expiry_not_before(config, capsys):
+    old = session_for(100)
+    opener = Opener()
+    env = Env(config, old, [old], opener=opener)
+    opener.env = env
+    with pytest.raises(AuthRejected):
+        env.client.account()
+    # polls at +30, +60, +90 s came before the expiry at +100 s and did not open; the poll at +120 s did
+    assert opener.times == [NOW + 120]
+    assert env.refresher_calls > 4  # polling went on after the opener
+    err = capsys.readouterr().err
+    assert err.count("loading https://splice.com/sounds in Chrome") == 1
+    assert old.token not in err
+
+
+def test_opener_then_chrome_renewal_resumes(config, capsys):
+    old, new = session_for(100), session_for(7200, "b")
+    opener = Opener()
+    env = Env(config, old, opener=opener)
+    opener.env = env
+    env._refresh = lambda: new if opener.times and env.now >= opener.times[0] + 60 else old  # cookie written late
+    env.client.refresher = env._refresh
+    env.client.account()
+    assert len(opener.times) == 1 and env.client.session is new
+    assert len(env.requests) == 1
+    err = capsys.readouterr().err
+    assert "renewed Splice login" in err and new.token not in err and old.token not in err
+
+
+def test_opener_not_used_when_chrome_renews_before_expiry(config):
+    opener = Opener()
+    env = Env(config, session_for(100), [session_for(100), session_for(7200, "b")], opener=opener)
+    opener.env = env
+    env.client.account()
+    assert opener.times == []
+
+
+def test_opener_once_per_expiry_across_calls(config):
+    old = session_for(-10)  # already expired when the run wakes up (overnight wait)
+    opener = Opener()
+    env = Env(config, old, [old], opener=opener)
+    opener.env = env
+    for _ in range(2):
+        with pytest.raises(AuthRejected):
+            env.client.account()
+    assert len(opener.times) == 1 and opener.times[0] == NOW
+
+
+def test_opener_never_used_without_a_chrome_refresher(config):
+    opener = Opener()
+    env = Env(config, session_for(-10), with_refresher=False, opener=opener)
+    opener.env = env
+    with pytest.raises(AuthRejected):
+        env.client.account()
+    assert opener.times == []
+
+
+def test_build_client_opener_only_for_chrome_on_macos(config, monkeypatch):
+    from splice_curator import cli
+    from splice_curator.client import open_splice_in_chrome
+
+    monkeypatch.setattr(cli, "load_session", lambda source, now, names: session_for(3600))
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    assert cli.build_client(config, "chrome").opener is open_splice_in_chrome
+    assert cli.build_client(config, "env").opener is None
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    assert cli.build_client(config, "chrome").opener is None
+
+
+def test_open_splice_in_chrome_runs_open_in_background(monkeypatch):
+    from splice_curator import client
+
+    calls = []
+    monkeypatch.setattr(client.subprocess, "run", lambda args, **kw: calls.append(args))
+    client.open_splice_in_chrome()
+    assert calls == [["open", "-g", "-a", "Google Chrome", "https://splice.com/sounds"]]
+
+    def broken(args, **kw):
+        raise FileNotFoundError("open")
+
+    monkeypatch.setattr(client.subprocess, "run", broken)
+    client.open_splice_in_chrome()  # an opener failure never stops the polling

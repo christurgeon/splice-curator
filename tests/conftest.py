@@ -36,6 +36,17 @@ def no_real_network(monkeypatch):
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", refuse)
 
 
+@pytest.fixture(autouse=True)
+def no_real_subprocess(monkeypatch):
+    """Fail any test that would really run `open` (the Chrome opener)."""
+    from splice_curator import client
+
+    def refuse(*args, **kwargs):
+        raise AssertionError(f"real subprocess attempted: {args[0] if args else kwargs}")
+
+    monkeypatch.setattr(client.subprocess, "run", refuse)
+
+
 @pytest.fixture
 def token():
     return make_jwt({"exp": 4_000_000_000})

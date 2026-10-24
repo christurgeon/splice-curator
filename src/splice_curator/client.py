@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -32,6 +33,7 @@ UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 PACK_ID_RE = re.compile(r"^[0-9a-fA-F-]{8,64}$")  # legacy pack ids are hex with odd group sizes
 SLUG_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 LOGIN_AGAIN = "Splice rejected the session; log in to splice.com again"
+RENEW_URL = "https://splice.com/sounds"
 
 
 class SpliceError(Exception):
@@ -174,6 +176,18 @@ def _parse_price(prices) -> int | None:
     return None
 
 
+def open_splice_in_chrome() -> None:
+    """Load a splice.com page in Chrome without bringing it to the front (macOS).
+
+    Splice renews its login cookie only when a page loads after the old token expired.
+    """
+    try:
+        subprocess.run(["open", "-g", "-a", "Google Chrome", RENEW_URL], check=False, timeout=30,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass  # polling goes on; the run stops after refresh_wait_s as before
+
+
 class SpliceClient:
     def __init__(
         self,
@@ -183,9 +197,12 @@ class SpliceClient:
         transport: httpx.BaseTransport | None = None,
         refresher: Callable[[], Session] | None = None,
         clock: Callable[[], float] = time.time,
+        opener: Callable[[], None] | None = None,
     ) -> None:
         self.session = session
         self.refresher = refresher
+        self.opener = opener  # loads splice.com in Chrome after the token expired (chrome source on macOS)
+        self._opened_for: int | None = None  # expiry for which the opener already ran
         self._clock = clock
         self.throttle = throttle
         self.config = config
@@ -248,6 +265,17 @@ class SpliceClient:
               file=sys.stderr, flush=True)
         return True
 
+    def _open_after_expiry(self) -> None:
+        """Run the opener once per expired token; Splice does not renew a token that is still valid."""
+        exp = self.session.expires_at
+        if self.opener is None or exp is None or self._clock() <= exp or self._opened_for == exp:
+            return
+        self._opened_for = exp
+        stamp = datetime.fromtimestamp(self._clock())
+        print(f"[{stamp:%H:%M:%S}] Splice login expired; loading {RENEW_URL} in Chrome (background) to renew it",
+              file=sys.stderr, flush=True)
+        self.opener()
+
     def _ensure_fresh(self, force: bool = False) -> None:
         """Make sure the GraphQL token is valid; pick up a renewed one from Chrome if not."""
         exp = self.session.expires_at
@@ -264,12 +292,14 @@ class SpliceClient:
         print(f"waiting for Chrome to renew the Splice login — keep a splice.com tab open "
               f"(up to {cfg.refresh_wait_s / 60:g} min)", file=sys.stderr, flush=True)
         waited = 0.0
+        self._open_after_expiry()
         while waited < cfg.refresh_wait_s:
             step = min(cfg.refresh_poll_s, cfg.refresh_wait_s - waited)
             self.throttle.sleep(step)
             waited += step
             if self._try_refresh():
                 return
+            self._open_after_expiry()  # Chrome writes the new cookie to disk with a delay: keep polling
         raise AuthRejected("Splice login expired and Chrome did not renew it; open splice.com in Chrome and run again")
 
     def _post_once(self, operation: str, query: str) -> httpx.Response:
