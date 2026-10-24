@@ -8,6 +8,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .budget import GENRES, Genre
+
 DEFAULT_CONFIG_PATH = Path("~/.splice-curator/config.toml").expanduser()
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -57,6 +59,7 @@ class Config:
     refresh_margin_s: int = 300
     refresh_poll_s: float = 30.0
     refresh_wait_s: float = 900.0
+    genres: tuple[Genre, ...] = GENRES  # enabled genres only
 
     @property
     def catalog_path(self) -> Path:
@@ -70,6 +73,7 @@ def _defaults() -> dict:
         "staging_dir": home / "SpliceCurator" / "downloads",
         "splice_dir": home / "Splice",
         "delays": default_delays(),
+        "genres": {g.id: g for g in GENRES},
     }
 
 
@@ -85,10 +89,44 @@ def _merge(values: dict, extra: dict) -> None:
                 if not isinstance(delay, Delay):
                     delay = Delay(float(delay["min_s"]), float(delay["max_s"]))
                 values["delays"][kind] = delay
+        elif key == "genres":
+            for genre_id, table in value.items():
+                values["genres"][genre_id] = _genre_from_table(genre_id, table, values["genres"].get(genre_id))
         elif key in _PATH_FIELDS:
             values[key] = Path(value).expanduser()
         else:
             values[key] = value
+
+
+def _genre_from_table(genre_id: str, table: dict, base: Genre | None) -> Genre:
+    """Apply a ``[genres.<id>]`` table over a known genre; a new id needs every key."""
+    keys = {"title", "weight", "tags", "prefixes", "bpm"}
+    if unknown := set(table) - keys:
+        raise ValueError(f"genres.{genre_id}: unknown keys {sorted(unknown)}")
+    if base is None and (missing := keys - set(table)):
+        raise ValueError(f"genres.{genre_id}: new genre needs keys {sorted(missing)}")
+    bpm = table.get("bpm", base.bpm if base else None)
+    if len(bpm) != 2 or bpm[0] > bpm[1]:
+        raise ValueError(f"genres.{genre_id}: bpm must be [low, high]")
+    weight = float(table.get("weight", base.weight if base else 0))
+    if weight < 0:
+        raise ValueError(f"genres.{genre_id}: weight must not be negative")
+    return Genre(
+        genre_id,
+        table.get("title", base.title if base else ""),
+        weight,
+        frozenset(t.lower() for t in table["tags"]) if "tags" in table else base.tags,
+        tuple(table["prefixes"]) if "prefixes" in table else base.prefixes,
+        (int(bpm[0]), int(bpm[1])),
+    )
+
+
+def _enabled_genres(genres: dict[str, Genre]) -> tuple[Genre, ...]:
+    enabled = tuple(g for g in genres.values() if g.weight > 0)
+    total = sum(g.weight for g in enabled)
+    if abs(total - 1.0) > 1e-6:
+        raise ValueError(f"genre weights must sum to 1.0; enabled weights sum to {total:g}")
+    return enabled
 
 
 def _persist_anonymous_id(path: Path, anonymous_id: str) -> None:
@@ -112,4 +150,5 @@ def load_config(path: Path | None = None, overrides: dict | None = None) -> Conf
         values["anonymous_id"] = str(uuid.uuid4())
     if overrides:
         _merge(values, overrides)
+    values["genres"] = _enabled_genres(values["genres"])
     return Config(**values)

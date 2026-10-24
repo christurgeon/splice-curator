@@ -9,13 +9,13 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .auth import COOKIE_NAMES, AuthError, load_session
-from .budget import GROUPS, get_group
+from .budget import GROUPS, Genre, genre_quotas, get_genre, get_group
 from .buy import CAP_REASONS, run_buy
 from .catalog import Catalog
 from .client import AuthRejected, SpliceClient, SpliceError
 from .config import DEFAULT_CONFIG_PATH, DELAY_KINDS, Config, Delay, load_config
 from .organize import run_organize
-from .rank import build_shortlist
+from .rank import build_genre_shortlist, build_shortlist
 from .review import write_review_page
 from .sync import refresh_owned, run_sync
 from .throttle import Throttle
@@ -78,17 +78,46 @@ def cmd_auth(args, config: Config) -> int:
     return EXIT_OK
 
 
+def _pick_genres(args, config: Config) -> list[Genre] | None:
+    """The enabled genres to use, or None (after printing an error) for a bad ``--genre``."""
+    if not args.genre:
+        return list(config.genres)
+    try:
+        return [get_genre(args.genre, config.genres)]
+    except KeyError as exc:
+        print(f"error: {exc.args[0]} (a genre with weight 0 is disabled)", file=sys.stderr)
+        return None
+
+
+def _search_plan(args, group, genres: list[Genre]) -> list[tuple[str, str | None, str | None]]:
+    """``(query text, genre id, subtype)`` for every query to run."""
+    if args.query:
+        return [(args.query, None, None)]
+    if not group.subtypes:
+        return [(q, None, None) for q in group.queries]
+    return [
+        (f"{prefix} {subtype}", genre.id, subtype)
+        for genre in genres
+        for subtype in group.subtypes
+        for prefix in genre.prefixes
+    ]
+
+
 def cmd_search(args, config: Config) -> int:
     group = get_group(args.group)
-    queries = [args.query] if args.query else list(group.queries)
+    genres = [] if args.query else _pick_genres(args, config)
+    if genres is None:
+        return EXIT_AUTH
+    plan = _search_plan(args, group, genres)
     client = build_client(config, args.source)
     catalog = Catalog(config.catalog_path)
     limit = 50
     total = 0
-    for query in queries:
+    for query, genre_id, subtype in plan:
         for page in range(1, args.pages + 1):
             result = client.search(query, group.category, page, limit=limit)
-            catalog.record_search(result.samples, query, group.id, page, limit)
+            catalog.record_search(result.samples, query, group.id, page, limit,
+                                  genre=genre_id, subtype=subtype)
             total += len(result.samples)
             _log(f"{group.id}: {query!r} page {page}/{result.total_pages}: "
                  f"{len(result.samples)} samples ({result.total_records} total)")
@@ -101,18 +130,52 @@ def cmd_search(args, config: Config) -> int:
 
 def cmd_shortlist(args, config: Config) -> int:
     group = get_group(args.group)
-    size = args.size or config.batch_size
     catalog = Catalog(config.catalog_path)
-    samples = build_shortlist(catalog.rows_for_group(group.id), group, size, config.per_pack_cap)
+    genre = None
+    if args.genre:
+        picked = _pick_genres(args, config)
+        if picked is None:
+            return EXIT_AUTH
+        genre = picked[0]
+        left = genre_quotas(group, config.genres)[genre.id] - catalog.count_spent(group.id, genre.id)
+        if left <= 0:
+            print(f"quota for {group.id}/{genre.id} is used up")
+            return EXIT_OK
+        size = args.size or min(left, config.batch_size)
+        samples = build_genre_shortlist(
+            catalog.rows_for_group(group.id, genre.id), group, genre, size, config.per_pack_cap)
+        batch_id = f"{group.id}-{genre.id}-{datetime.now():%Y%m%d-%H%M%S}"
+    else:
+        size = args.size or config.batch_size
+        samples = build_shortlist(catalog.rows_for_group(group.id), group, size, config.per_pack_cap)
+        batch_id = f"{group.id}-{datetime.now():%Y%m%d-%H%M%S}"
     if not samples:
         print(f"nothing to shortlist for {group.id}; run `search --group {group.id}` first")
         return EXIT_OK
-    batch_id = f"{group.id}-{datetime.now():%Y%m%d-%H%M%S}"
-    path = write_review_page(samples, group, batch_id, config.data_dir / "review")
+    path = write_review_page(samples, group, batch_id, config.data_dir / "review",
+                             genre_title=genre.title if genre else None)
     catalog.mark_shortlisted([s.catalog_uuid for s in samples], batch_id)
     print(f"review page: {path}")
     print(f"{len(samples)} sounds; approving all would cost {len(samples)} credits "
           f"(group budget {group.credits})")
+    return EXIT_OK
+
+
+def cmd_quota(args, config: Config) -> int:
+    group = get_group(args.group)
+    catalog = Catalog(config.catalog_path)
+    quotas = genre_quotas(group, config.genres)
+    header = ("genre", "quota", "searched", "shortlisted", "bought", "remaining")
+    table = [header]
+    for genre in config.genres:
+        rows = catalog.rows_for_group(group.id, genre.id)
+        bought = sum(1 for r in rows if r.sample.licensed)
+        shortlisted = sum(1 for r in rows if r.shortlisted_batch and not r.sample.licensed)
+        remaining = max(0, quotas[genre.id] - catalog.count_spent(group.id, genre.id))
+        table.append((genre.id, *map(str, (quotas[genre.id], len(rows), shortlisted, bought, remaining))))
+    widths = [max(len(row[i]) for row in table) for i in range(len(header))]
+    for row in table:
+        print("  ".join(cell.ljust(w) for cell, w in zip(row, widths)).rstrip())
     return EXIT_OK
 
 
@@ -212,14 +275,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("search", parents=[common], help="search one budget group into the catalog")
     s.add_argument("--group", required=True, help="group id: " + ", ".join(g.id for g in GROUPS))
-    s.add_argument("--pages", type=int, default=4)
-    s.add_argument("--query", help="one query instead of the group's queries")
+    s.add_argument("--genre", help="search one genre only (default: every enabled genre)")
+    s.add_argument("--pages", type=int, default=2)
+    s.add_argument("--query", help="one query instead of the genre and subtype queries (no genre)")
     s.set_defaults(func=cmd_search)
 
     s = sub.add_parser("shortlist", help="rank a group and write an HTML review page")
     s.add_argument("--group", required=True)
+    s.add_argument("--genre", help="shortlist one genre (default size: its remaining quota)")
     s.add_argument("--size", type=int, help="sounds per batch (default: config batch_size)")
     s.set_defaults(func=cmd_shortlist)
+
+    s = sub.add_parser("quota", help="show genre quotas and progress for a group (offline)")
+    s.add_argument("--group", required=True)
+    s.set_defaults(func=cmd_quota)
 
     s = sub.add_parser("sync", parents=[common], help="download owned sounds that are not on disk yet")
     s.add_argument("--limit", type=int, help="download at most N files")

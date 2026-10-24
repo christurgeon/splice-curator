@@ -51,3 +51,30 @@ def test_paths_expand_and_catalog_path(tmp_path):
     assert isinstance(c, Config)
     assert c.catalog_path == tmp_path / "data" / "catalog.sqlite"
     assert "~" not in str(c.staging_dir)
+
+
+def test_config_genre_override_and_disable(tmp_path):
+    from splice_curator.budget import genre_quotas, get_group
+
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[genres.afro_house]\nweight = 0\n\n[genres.tech_house]\nweight = 0.50\n"
+    )
+    c = load_config(path=path)
+    assert [g.id for g in c.genres] == ["tech_house", "minimal", "deep_house", "classic_house"]
+    assert c.genres[0].prefixes == ("tech house",)  # unset keys keep the default
+    assert genre_quotas(get_group("kicks"), c.genres) == {
+        "tech_house": 150, "minimal": 75, "deep_house": 45, "classic_house": 30,
+    }
+
+
+def test_config_genre_weights_must_sum_to_one(tmp_path):
+    import pytest
+
+    path = tmp_path / "config.toml"
+    path.write_text("[genres.tech_house]\nweight = 0.50\n")
+    with pytest.raises(ValueError, match="sum to 1.0.*1.1"):
+        load_config(path=path)
+    path.write_text("[genres.new]\nweight = 0\n")
+    with pytest.raises(ValueError, match="needs keys"):
+        load_config(path=path)

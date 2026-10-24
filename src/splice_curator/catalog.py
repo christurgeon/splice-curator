@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS sample_groups (
     grp TEXT NOT NULL,
     PRIMARY KEY (file_hash, grp)
 );
+CREATE TABLE IF NOT EXISTS sample_genres (
+    file_hash TEXT NOT NULL REFERENCES samples(file_hash),
+    grp TEXT NOT NULL,
+    genre TEXT NOT NULL,
+    subtype TEXT NOT NULL,
+    PRIMARY KEY (file_hash, grp, genre, subtype)
+);
 CREATE TABLE IF NOT EXISTS searches (
     query TEXT,
     grp TEXT,
@@ -66,6 +73,7 @@ class CatalogRow:
     groups: set[str]
     local_path: str | None
     shortlisted_batch: str | None
+    genres: set[tuple[str, str]] = field(default_factory=set)  # (genre, subtype) for the loaded group
 
 
 class Catalog:
@@ -90,6 +98,8 @@ class Catalog:
         page: int,
         page_size: int,
         ranked: bool = True,
+        genre: str | None = None,
+        subtype: str | None = None,
     ) -> None:
         """Upsert results. ``ranked=False`` (the owned-library listing) leaves positions alone."""
         now = datetime.now().isoformat(timespec="seconds")
@@ -138,6 +148,12 @@ class Catalog:
                         "INSERT OR IGNORE INTO sample_groups(file_hash, grp) VALUES (?, ?)",
                         (s.file_hash, group),
                     )
+                    if genre and subtype:
+                        self.db.execute(
+                            "INSERT OR IGNORE INTO sample_genres(file_hash, grp, genre, subtype)"
+                            " VALUES (?, ?, ?, ?)",
+                            (s.file_hash, group, genre, subtype),
+                        )
 
     def mark_licensed(self, catalog_uuid: str) -> None:
         with self.db:
@@ -180,7 +196,7 @@ class Catalog:
         ).fetchone()
         return count
 
-    def _rows(self, where: str, params: tuple) -> list[CatalogRow]:
+    def _rows(self, where: str, params: tuple, genre_group: str | None = None) -> list[CatalogRow]:
         rows = self.db.execute(
             f"SELECT * FROM samples {where} ORDER BY best_position, file_hash", params
         ).fetchall()
@@ -194,10 +210,23 @@ class Catalog:
                     f"SELECT file_hash, grp FROM sample_groups WHERE file_hash IN ({marks})", chunk
                 ):
                     groups.setdefault(g["file_hash"], set()).add(g["grp"])
-        return [self._to_row(r, groups.get(r["file_hash"], set())) for r in rows]
+        genres: dict[str, set[tuple[str, str]]] = {}
+        if rows and genre_group:
+            for i in range(0, len(hashes), 500):
+                chunk = hashes[i : i + 500]
+                marks = ",".join("?" * len(chunk))
+                for g in self.db.execute(
+                    "SELECT file_hash, genre, subtype FROM sample_genres"
+                    f" WHERE grp = ? AND file_hash IN ({marks})", [genre_group, *chunk]
+                ):
+                    genres.setdefault(g["file_hash"], set()).add((g["genre"], g["subtype"]))
+        return [
+            self._to_row(r, groups.get(r["file_hash"], set()), genres.get(r["file_hash"], set()))
+            for r in rows
+        ]
 
     @staticmethod
-    def _to_row(r: sqlite3.Row, groups: set[str]) -> CatalogRow:
+    def _to_row(r: sqlite3.Row, groups: set[str], genres: set[tuple[str, str]]) -> CatalogRow:
         sample = Sample(
             file_hash=r["file_hash"],
             catalog_uuid=r["catalog_uuid"],
@@ -214,12 +243,26 @@ class Catalog:
             licensed=bool(r["licensed"]),
             preview_url=r["preview_url"],
         )
-        return CatalogRow(sample, r["best_position"], groups, r["local_path"], r["shortlisted_batch"])
+        return CatalogRow(sample, r["best_position"], groups, r["local_path"], r["shortlisted_batch"], genres)
 
-    def rows_for_group(self, group: str) -> list[CatalogRow]:
+    def rows_for_group(self, group: str, genre: str | None = None) -> list[CatalogRow]:
+        if genre:
+            return self._rows(
+                "WHERE file_hash IN (SELECT file_hash FROM sample_genres WHERE grp = ? AND genre = ?)",
+                (group, genre), group,
+            )
         return self._rows(
-            "WHERE file_hash IN (SELECT file_hash FROM sample_groups WHERE grp = ?)", (group,)
+            "WHERE file_hash IN (SELECT file_hash FROM sample_groups WHERE grp = ?)", (group,), group
         )
+
+    def count_spent(self, group: str, genre: str) -> int:
+        """Rows found for this group and genre that are licensed or shortlisted."""
+        (count,) = self.db.execute(
+            "SELECT COUNT(*) FROM samples WHERE (licensed = 1 OR shortlisted_batch IS NOT NULL)"
+            " AND file_hash IN (SELECT file_hash FROM sample_genres WHERE grp = ? AND genre = ?)",
+            (group, genre),
+        ).fetchone()
+        return count
 
     def get_by_catalog_uuid(self, catalog_uuid: str) -> CatalogRow | None:
         rows = self._rows("WHERE catalog_uuid = ?", (catalog_uuid,))

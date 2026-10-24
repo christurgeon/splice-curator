@@ -195,13 +195,16 @@ PAGE = """<!doctype html>
 """
 
 
-def write_review_page(samples: list[Sample], group: Group, batch_id: str, out_dir: Path) -> Path:
+def write_review_page(
+    samples: list[Sample], group: Group, batch_id: str, out_dir: Path, genre_title: str | None = None
+) -> Path:
     if not BATCH_RE.match(batch_id):
         raise ValueError(f"bad batch id {batch_id!r}")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     data = {"batch_id": batch_id, "group": group.id, "rows": [_row(s) for s in samples]}
-    title = html.escape(f"{group.title} — batch {batch_id} ({len(samples)} sounds)")
+    name = f"{group.title} / {genre_title}" if genre_title else group.title
+    title = html.escape(f"{name} — batch {batch_id} ({len(samples)} sounds)")
     page = PAGE.replace("__TITLE__", title).replace("__DATA__", _script_json(data))
     path = out_dir / f"{batch_id}.html"
     path.write_text(page, encoding="utf-8")

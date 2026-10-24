@@ -99,3 +99,34 @@ def test_tags_roundtrip(tmp_path):
     Catalog(path).record_search([s], "q", "kicks", 1, 50)
     row = Catalog(path).get_by_catalog_uuid(s.catalog_uuid)
     assert row.sample == s
+
+
+def test_record_search_stores_genre_and_subtype(tmp_path):
+    cat = Catalog(tmp_path / "c.sqlite")
+    s = make_sample(1)
+    cat.record_search([s], "tech house kick", "kicks", 1, 50, genre="tech_house", subtype="kick")
+    cat.record_search([s], "minimal house kick", "kicks", 1, 50, genre="minimal", subtype="kick")
+    row = cat.rows_for_group("kicks")[0]
+    assert row.genres == {("tech_house", "kick"), ("minimal", "kick")}
+    assert cat.get_by_catalog_uuid(s.catalog_uuid).genres == set()
+
+
+def test_rows_for_group_filters_by_genre(tmp_path):
+    cat = Catalog(tmp_path / "c.sqlite")
+    a, b = make_sample(1), make_sample(2)
+    cat.record_search([a], "q", "kicks", 1, 50, genre="tech_house", subtype="kick")
+    cat.record_search([b], "q", "kicks", 1, 50, genre="deep_house", subtype="kick")
+    assert [r.sample.file_hash for r in cat.rows_for_group("kicks", "deep_house")] == [b.file_hash]
+    assert len(cat.rows_for_group("kicks")) == 2
+    assert cat.rows_for_group("snares_claps", "deep_house") == []
+
+
+def test_count_spent(tmp_path):
+    cat = Catalog(tmp_path / "c.sqlite")
+    samples = [make_sample(i) for i in range(1, 5)]
+    cat.record_search(samples, "q", "kicks", 1, 50, genre="tech_house", subtype="kick")
+    assert cat.count_spent("kicks", "tech_house") == 0
+    cat.mark_shortlisted([samples[0].catalog_uuid, samples[1].catalog_uuid], "kicks-tech_house-1")
+    cat.mark_licensed(samples[2].catalog_uuid)
+    assert cat.count_spent("kicks", "tech_house") == 3
+    assert cat.count_spent("kicks", "minimal") == 0

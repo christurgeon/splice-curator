@@ -5,14 +5,15 @@ from splice_curator.config import Delay
 
 
 def test_search_command_records_all_pages(tmp_path, fake_client, cli_env):
-    code = cli.main(["--config", str(cli_env), "search", "--group", "kicks", "--pages", "2"])
+    code = cli.main(["--config", str(cli_env), "search", "--group", "kicks", "--pages", "2",
+                    "--query", "house kick"])
     assert code == 0
     searches = [c for c in fake_client.calls if c[0] == "search"]
-    assert len(searches) == 6
-    assert {c[1] for c in searches} == {"house kick", "tech house kick", "deep house kick"}
+    assert len(searches) == 2
+    assert {c[1] for c in searches} == {"house kick"}
     assert all(c[2] == "oneshot" for c in searches)
     rows = Catalog(tmp_path / "data" / "catalog.sqlite").rows_for_group("kicks")
-    assert len(rows) == 12
+    assert len(rows) == 4
 
 
 def test_search_single_query(tmp_path, fake_client, cli_env):
@@ -66,3 +67,19 @@ def test_global_overrides(cli_env):
 
 def test_bad_delay_flag(cli_env, capsys):
     assert cli.main(["--config", str(cli_env), "--delay", "purchase=oops", "auth"]) == 1
+
+
+def test_search_command_runs_genre_subtype_queries(tmp_path, fake_client, cli_env):
+    assert cli.main(["--config", str(cli_env), "search", "--group", "kicks",
+                     "--genre", "minimal", "--pages", "1"]) == 0
+    assert [c[1] for c in fake_client.calls] == ["minimal house kick", "groovy tech house kick"]
+    cat = Catalog(tmp_path / "data" / "catalog.sqlite")
+    assert len(cat.rows_for_group("kicks", "minimal")) == 4
+    assert len(cat.rows_for_group("kicks", "tech_house")) == 0
+
+
+def test_search_all_genres_and_bad_genre(fake_client, cli_env, capsys):
+    assert cli.main(["--config", str(cli_env), "search", "--group", "kicks", "--pages", "1"]) == 0
+    assert len(fake_client.calls) == 7  # 1 + 2 + 1 + 1 + 2 prefixes, one subtype
+    assert cli.main(["--config", str(cli_env), "search", "--group", "kicks", "--genre", "nope"]) == 2
+    assert "unknown genre" in capsys.readouterr().err
