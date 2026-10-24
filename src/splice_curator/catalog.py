@@ -493,6 +493,36 @@ class Catalog:
     def rows_for_pack(self, pack_uuid: str) -> list[CatalogRow]:
         return self._rows("WHERE pack_uuid = ?", (pack_uuid,))
 
+    def batch_counts(self, group: str, genre: str) -> tuple[int, int]:
+        """``(bought, pending)`` sounds in batches for this group and genre."""
+        prefix = f"{group}-{genre}-"
+        total, bought = self.db.execute(
+            "SELECT COUNT(*), COALESCE(SUM(licensed), 0) FROM samples WHERE substr(shortlisted_batch, 1, ?) = ?",
+            (len(prefix), prefix),
+        ).fetchone()
+        return bought, total - bought
+
+    def release_pending(self, batch_id: str | None = None, suffix: str | None = None) -> int:
+        """Clear the batch mark on unbought sounds of one batch, or of every batch ending in ``suffix``."""
+        if batch_id is not None:
+            where, params = "shortlisted_batch = ?", (batch_id,)
+        elif suffix:
+            where, params = "substr(shortlisted_batch, -?) = ?", (len(suffix), suffix)
+        else:
+            raise ValueError("release needs a batch id or a suffix")
+        with self.db:
+            cur = self.db.execute(
+                f"UPDATE samples SET shortlisted_batch = NULL WHERE licensed = 0 AND {where}", params)
+        return cur.rowcount
+
+    def pending_batches(self) -> dict[str, int]:
+        """Batch id -> number of unbought sounds still marked with it."""
+        rows = self.db.execute(
+            "SELECT shortlisted_batch AS b, COUNT(*) AS n FROM samples"
+            " WHERE shortlisted_batch IS NOT NULL AND licensed = 0 GROUP BY b ORDER BY b"
+        ).fetchall()
+        return {r["b"]: r["n"] for r in rows}
+
     def get_by_catalog_uuid(self, catalog_uuid: str) -> CatalogRow | None:
         rows = self._rows("WHERE catalog_uuid = ?", (catalog_uuid,))
         return rows[0] if rows else None

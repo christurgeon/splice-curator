@@ -70,6 +70,18 @@ def near_dup_key(sample: Sample) -> tuple[str, str]:
     return _pack_key(sample), stem
 
 
+_VARIANT = re.compile(r"\b(wet|dry|alt|v\d+)\b")
+
+
+def dup_key(sample: Sample) -> tuple[str, str]:
+    """Near-duplicate key for autobuy: loops drop digits; one-shots keep digits but drop variant markers."""
+    if sample.category == "loop":
+        return near_dup_key(sample)
+    stem = sample.basename.lower().rsplit(".", 1)[0]
+    stem = _SEPARATORS.sub(" ", stem).strip()
+    return _pack_key(sample), _VARIANT.sub("", stem).replace("  ", " ").strip()
+
+
 def _genre_match(sample: Sample, genre: Genre) -> bool:
     return bool(genre.tags & sample.tag_labels) or (sample.pack_genre or "").lower() in genre.tags
 

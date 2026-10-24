@@ -120,9 +120,10 @@ def _split(total: int, weights: list[float]) -> list[int]:
     return parts
 
 
-def genre_quotas(group: Group, genres: tuple[Genre, ...] = GENRES) -> dict[str, int]:
-    """Split a group's credits across genres by weight."""
-    return dict(zip((g.id for g in genres), _split(group.credits, [g.weight for g in genres])))
+def genre_quotas(group: Group, genres: tuple[Genre, ...] = GENRES, total: int | None = None) -> dict[str, int]:
+    """Split a group's credits (or ``total``) across genres by weight."""
+    credits = group.credits if total is None else total
+    return dict(zip((g.id for g in genres), _split(credits, [g.weight for g in genres])))
 
 
 def subtype_quotas(group: Group, total: int) -> dict[str, int]:
