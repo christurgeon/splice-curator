@@ -12,7 +12,7 @@ ACCOUNT = "query Account { user { username } subscription { credits state } }"
 
 SEARCH = Template("""query SamplesSearch {
   assetsSearch(
-    filter: {legacy: true, published: true, asset_type_slug: sample$filter}
+    filter: {legacy: true, published: true, asset_type_slug: sample$filter}$children
     pagination: {page: $page, limit: $limit}
     sort: {sort: $sort, order: DESC}
     legacy: {use: true}
@@ -56,9 +56,10 @@ PURCHASE = Template("""mutation PurchaseAsset {
 
 PACK_SEARCH = Template("""query PackSearch {
   assetsSearch(
-    filter: {asset_type_slug: pack$filter}
+    filter: {legacy: true, published: true, asset_type_slug: pack$filter}
     pagination: {page: $page, limit: $limit}
     sort: {sort: popularity, order: DESC}
+    legacy: {use: true}
   ) {
     response_metadata { records }
     pagination_metadata { currentPage totalPages }

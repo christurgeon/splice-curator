@@ -53,6 +53,26 @@ pill).
   path `/audio_samples/<hash>` with **no file extension**, signed query
   string). Take the file name from the sample `name`, not from the URL.
 
+## Autobuy queries (verified live 2026-10-24, read-only)
+
+- `asset(uuid) { ... on SampleAsset { asset_prices { amount currency } } }`:
+  a one-shot sample returns `amount 1`, `currency "Credits"` (both owned and
+  not owned). The tool buys only when the parsed price equals the planned one.
+- Pack search needs `filter: {legacy: true, published: true, asset_type_slug:
+  pack, query}` and `legacy: {use: true}`. Without them the pack `uuid`s are
+  a different kind and `children` returns 404.
+- Pack ids are legacy ids: hex with odd groups, for example
+  `796e02ba-0b2e-8680-7860-b3387cec28998dfb579`. They are not standard UUIDs.
+- In-pack sounds: `assetsSearch(filter: {legacy: true, published: true,
+  asset_type_slug: sample, asset_category_slug: oneshot|loop}, children:
+  {parent_asset_uuid: "<pack id>"}, ...)`. `children` is a sibling of
+  `filter`, and `AssetChildrenInput` has no `asset_type_slug`.
+- `SamplesSearch` parents now also return the pack `uuid` (legacy id).
+- `legacyPacksChart(searchParams: {perPage: 100})` works (a list); per-label
+  charts use `providerPermalink`. `wwwPremiumProviders(sort: "chart",
+  per_page: 50)` returns a list. The global charts hold non-house packs
+  (hip hop, trap), so the tool filters labels by `tags_array`.
+
 ## Not verified
 
 - `purchaseAsset(uuid)` mutation (from spliceclaw). First verified in plan

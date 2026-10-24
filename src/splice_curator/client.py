@@ -29,6 +29,7 @@ CATEGORIES = ("oneshot", "loop")
 SORTS = ("popularity", "relevance", "recency", "random")
 ALLOWED_HOST_SUFFIXES = (".splice.com", ".amazonaws.com")
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+PACK_ID_RE = re.compile(r"^[0-9a-fA-F-]{8,64}$")  # legacy pack ids are hex with odd group sizes
 SLUG_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 LOGIN_AGAIN = "Splice rejected the session; log in to splice.com again"
 
@@ -118,6 +119,12 @@ def _parse_sample(item: dict) -> Sample:
         preview_url=preview,
         pack_uuid=pack.get("uuid"),
     )
+
+
+def _check_pack_id(value: str) -> str:
+    if not isinstance(value, str) or not PACK_ID_RE.match(value):
+        raise ValueError("pack id must be hex")
+    return value
 
 
 def _slug(value: str) -> str:
@@ -343,9 +350,8 @@ class SpliceClient:
             extra += f", asset_category_slug: {category}"
         if licensed is not None:
             extra += f", licensed: {'true' if licensed else 'false'}"
-        if pack_uuid:
-            extra += f', children: {{parent_asset_uuid: "{_check_uuid(pack_uuid)}"}}'
-        doc = queries.SEARCH.substitute(filter=extra, page=page, limit=limit, sort=sort)
+        children = f', children: {{parent_asset_uuid: "{_check_pack_id(pack_uuid)}"}}' if pack_uuid else ""
+        doc = queries.SEARCH.substitute(filter=extra, children=children, page=page, limit=limit, sort=sort)
         data = self._graphql("search", "SamplesSearch", doc)
         result = data.get("assetsSearch") or {}
         samples = [_parse_sample(i) for i in result.get("items") or [] if i and i.get("catalog_uuid")]

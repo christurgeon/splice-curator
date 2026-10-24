@@ -43,6 +43,8 @@ def test_pack_search_parses_packs(session, throttle, config):
     assert p.tags == ["groovy", "tech house"]
     assert p.sample_count == 80 and p.published_at.startswith("2026-05")
     q = seen[0]["query"]
+    # legacy ids are the ones `children` and the charts understand
+    assert "legacy: true, published: true, asset_type_slug: pack" in q and "legacy: {use: true}" in q
     assert "asset_type_slug: pack" in q and 'query: "tech house"' in q
     assert "sort: popularity" in q and "page: 2" in q
 
@@ -53,7 +55,8 @@ def test_pack_samples_filters_by_parent_and_category(session, throttle, config):
     assert len(page.samples) == 1
     q = seen[0]["query"]
     assert f'parent_asset_uuid: "{PACK}"' in q
-    assert "asset_category_slug: loop" in q and "limit: 100" in q and "sort: popularity" in q
+    assert "asset_category_slug: loop}, children:" in q  # `children` is a sibling of `filter`
+    assert "limit: 100" in q and "sort: popularity" in q
 
 
 def test_pack_samples_rejects_bad_uuid(session, throttle, config):
@@ -107,3 +110,9 @@ def test_chart_accepts_wrapped_list(session, throttle, config):
         {"uuid": "l1", "name": "A", "current_provider_chart_position": 1}]}}}
     _, handler = capture(body)
     assert len(make_client(session, throttle, config, handler).labels_chart()) == 1
+
+
+def test_pack_samples_accepts_legacy_pack_id(session, throttle, config):
+    seen, handler = capture(search_response([]))
+    make_client(session, throttle, config, handler).pack_samples("796e02ba-0b2e-8680-7860-b3387cec28998dfb579", "loop", 1)
+    assert 'parent_asset_uuid: "796e02ba-0b2e-8680-7860-b3387cec28998dfb579"' in seen[0]["query"]
