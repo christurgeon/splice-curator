@@ -70,6 +70,10 @@ requests share one throttle; there are never parallel requests to Splice.
 | `shortlist` | no | Rank catalog rows for one group (and genre) and write an HTML review page. |
 | `quota` | no | Show each genre's quota, searched, shortlisted, bought, and remaining counts for a group. |
 | `buy` | **yes, with `--confirm`** | License the sounds in an approved list. |
+| `discover` | no | Find the best packs per genre (charts, popularity, recent) and their best sounds. |
+| `autobuy plan` | no | Choose sounds for the live balance minus `keep`; saves only with `--confirm`. |
+| `autobuy run` | **yes, with `--confirm`** | Buy the sounds of a saved plan, across several days if needed. |
+| `release` | no | Return unbought planned sounds to the quotas. |
 | `sync` | no | Download every owned sound that is not on disk yet. |
 | `organize` | no | Copy downloaded files into an organized library. |
 
@@ -80,6 +84,11 @@ uv run splice-curator shortlist --group kicks --genre tech_house [--size 120]
 uv run splice-curator quota --group kicks
 uv run splice-curator buy approved-<batch>.json                 # dry run
 uv run splice-curator buy approved-<batch>.json --confirm --max-credits 50
+uv run splice-curator discover [--genre tech_house] [--force]
+uv run splice-curator autobuy plan [--group all|kicks] [--replace] [--page] [--confirm]
+uv run splice-curator autobuy run plan-<id>.json                      # dry run
+uv run splice-curator autobuy run plan-<id>.json --confirm --until-done
+uv run splice-curator release [BATCH] [--rejected rejected-<id>.json]
 uv run splice-curator sync [--limit N] [--no-refresh]
 uv run splice-curator organize /Volumes/SSD/Library
 ```
@@ -120,6 +129,81 @@ weight = 0
 
 [genres.tech_house]
 weight = 0.50
+```
+
+### Autobuy
+
+Autobuy chooses sounds by popularity signals instead of by ear, then buys
+them within the daily cap. Presets are not covered.
+
+1. `discover` (free, read-only) reads the weekly pack and label charts, the
+   most popular packs per enabled genre (all time and recent), and the most
+   popular one-shots and loops inside each kept pack. Results are cached
+   (`discovery_ttl_days`, `chart_ttl_days`); a full first run takes about 40
+   minutes at the default pacing.
+2. `autobuy plan` reads the live balance, subtracts `keep`, and scores every
+   candidate (see `[scoring]`). It prints capacity per group and genre,
+   credits by group and genre, the share from charted and recent packs, top
+   packs and labels, score percentiles, storage need, and the buying days
+   needed against `deadline`. **Without `--confirm` nothing is saved.** With
+   `--confirm` it marks batches (ids end in `-ab`), writes
+   `approved-<batch>.json`, `plans/plan-<id>.json`, and `plans/plan-<id>.csv`
+   (pack, label, score, why, splice.com link). `--page` also writes
+   `review/plan-<id>.html`: untick sounds you dislike and click "Export
+   rejected list". Saving a plan never spends credits.
+3. `autobuy run PLAN.json` is a dry run unless `--confirm`. It buys in plan
+   order (groups interleaved, so an early stop leaves a balanced library) and
+   skips `rejected-<id>.json` if it sits next to the plan. `--until-done`
+   sleeps until midnight at the daily cap and continues. Run it under
+   `caffeinate -i` with a splice.com tab open in Chrome:
+
+   ```bash
+   caffeinate -i uv run splice-curator --source chrome autobuy run plan-<id>.json --confirm --until-done
+   ```
+
+4. `release` clears the batch mark of unbought sounds of all autobuy plans
+   (or one batch id) so planning can start again; `--replace` on `plan` does
+   the same first. `release --rejected FILE` removes rejected sounds from the
+   quotas for good.
+
+Spending guards (also used by `buy`): a sound is bought only if Splice shows
+a price in credits equal to the planned price (else it is skipped and logged
+as `price_unknown` or `price_mismatch`; the run stops after
+`max_price_skips`); budgets and `--max-credits` count credits; every 25
+purchases the balance is compared with the logged spend and a mismatch stops
+the run; a lock file (`buy.lock`) allows one buying process at a time; sounds
+already owned in the catalog cost no request; an earlier `uncertain` purchase
+is checked read-only before the next run; staging free space is checked
+before each buy.
+
+New config keys (all optional):
+
+```toml
+keep = 200                  # credits left after the plan
+deadline = 2026-11-06       # your next charge date
+max_price_skips = 5
+recent_months = 30          # what counts as a recent pack
+packs_per_genre = 60
+discovery_ttl_days = 7
+chart_ttl_days = 7
+chart_labels = 15           # labels whose own weekly pack chart is read
+max_per_pack_per_group = 6
+max_per_pack_total = 25
+per_label_share = 0.15      # of a group's target
+key_share_cap = 0.15        # bass and chord loops
+floor_high = 40             # score percentile floors
+floor_low = 10
+prefer_packs = []           # +0.3 score
+prefer_labels = []
+exclude_packs = []          # never picked
+exclude_labels = []
+
+[scoring]                   # weights; defaults shown in src/splice_curator/config.py
+in_pack_pop = 1.0
+query_pop = 0.6
+pack_pop = 0.4
+pack_recent_pop = 0.5
+trending = 0.4
 ```
 
 ### Review flow

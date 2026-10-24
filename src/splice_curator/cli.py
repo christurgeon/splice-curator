@@ -14,9 +14,10 @@ from .budget import GROUPS, Genre, genre_quotas, get_genre, get_group
 from .buy import CAP_REASONS, run_buy
 from .catalog import Catalog
 from .discover import run_discover
-from .planfiles import estimate_bytes_per_sound, save_plan, summarize
+from .planfiles import estimate_bytes_per_sound, load_plan, save_plan, schedule_lines, summarize
 from .quality import build_context
 from .review import load_rejected
+from .runner import run_autobuy
 from .selection import AUTOBUY_SUFFIX, make_plan
 from .client import AuthRejected, SpliceClient, SpliceError
 from .config import DEFAULT_CONFIG_PATH, DELAY_KINDS, Config, Delay, load_config
@@ -314,6 +315,59 @@ def cmd_autobuy_plan(args, config: Config) -> int:
     return EXIT_OK
 
 
+def cmd_autobuy_run(args, config: Config) -> int:
+    plan_path = Path(args.plan)
+    plan = load_plan(plan_path)
+    rejected: set[str] = set()
+    candidates = [Path(args.rejected)] if args.rejected else [plan_path.with_name(f"rejected-{plan.plan_id}.json")]
+    for path in candidates:
+        if path.is_file() or args.rejected:
+            rejected = set(load_rejected(path))
+            print(f"subtracting {len(rejected)} rejected sounds ({path})")
+    client = build_client(config, args.source)
+    catalog = Catalog(config.catalog_path)
+    caps = [c for c in (args.max_credits, config.max_purchases_per_run) if c is not None]
+    max_credits = min(caps) if caps else None
+    if args.confirm:
+        _log(f"buying for real: plan {plan.plan_id}, up to {max_credits if max_credits is not None else 'all'} "
+             f"credits, daily cap {config.max_purchases_per_day}")
+    result = run_autobuy(
+        client, catalog, plan,
+        confirm=args.confirm, max_credits=max_credits, daily_cap=config.max_purchases_per_day,
+        staging=None if args.no_download else config.staging_dir, rejected=rejected,
+        until_done=args.until_done, min_free_bytes=config.min_free_bytes,
+        max_price_skips=config.max_price_skips, log=_log,
+    )
+    report = result.buy
+    if report.dry_run:
+        needed = report.planned - report.skipped_owned
+        print(f"planned: {report.planned} (rejected and removed: {result.skipped_rejected})")
+        print(f"already owned: {report.skipped_owned}")
+        print(f"credits needed: {needed}")
+        print(f"credits available: {report.credits_before}")
+        for line in schedule_lines(needed, config, date.today()):
+            print(line)
+        print("dry run: no credits spent (add --confirm to buy; --until-done to keep going across days)")
+        return EXIT_OK
+    for day, n in result.days:
+        print(f"{day}: bought {n}")
+    print(f"bought {report.bought} ({report.credits_spent} credits), already owned {report.skipped_owned}, "
+          f"left in plan {result.remaining}, credits {report.credits_before} -> {report.credits_after}")
+    expected = None if report.credits_before is None else report.credits_before - report.credits_spent
+    if report.credits_after is not None and expected is not None and report.credits_after != expected:
+        print(f"warning: expected {expected} credits left, Splice reports {report.credits_after}", file=sys.stderr)
+    for uuid in report.download_failed:
+        print(f"  download failed (run sync later): {uuid}")
+    for uuid in report.uncertain:
+        print(f"  UNCERTAIN, check on splice.com: {uuid}", file=sys.stderr)
+    if report.stopped_reason:
+        print(f"stopped: {report.stopped_reason}", file=sys.stderr)
+        if report.stopped_reason in CAP_REASONS:
+            return EXIT_OK
+        return EXIT_AUTH if "log in" in report.stopped_reason else EXIT_ERROR
+    return EXIT_OK
+
+
 def cmd_release(args, config: Config) -> int:
     catalog = Catalog(config.catalog_path)
     if args.rejected:
@@ -405,6 +459,18 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--page", action="store_true", help="also write a spot-check page (with --confirm)")
     a.add_argument("--confirm", action="store_true", help="save the plan and mark its batches (spends nothing)")
     a.set_defaults(func=cmd_autobuy_plan)
+
+    a = auto.add_parser("run", parents=[common],
+                        help="buy the sounds in a saved plan (dry run unless --confirm)")
+    a.add_argument("plan", metavar="PLAN.json")
+    a.add_argument("--confirm", action="store_true", help="really spend credits")
+    a.add_argument("--max-credits", type=int, help="spend at most N credits this run")
+    a.add_argument("--until-done", action="store_true",
+                   help="at the daily cap, sleep until midnight and go on (run under `caffeinate -i`)")
+    a.add_argument("--no-download", action="store_true", help="do not download after each purchase")
+    a.add_argument("--rejected", metavar="REJECTED.json",
+                   help="sounds to skip (default: rejected-<plan id>.json next to the plan, if present)")
+    a.set_defaults(func=cmd_autobuy_run)
 
     s = sub.add_parser("release", help="return unbought planned sounds to the quotas (offline)")
     s.add_argument("batch", nargs="?", help="one batch id (default: all autobuy plans)")
