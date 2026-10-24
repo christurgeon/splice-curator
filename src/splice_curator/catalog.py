@@ -157,6 +157,15 @@ class Catalog:
                     self.db.execute(statement)
             self.db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
+    def in_memory_copy(self) -> "Catalog":
+        """A throwaway copy, so a dry run can change data without touching the file."""
+        copy = Catalog.__new__(Catalog)
+        copy.path = self.path
+        copy.db = sqlite3.connect(":memory:")
+        copy.db.row_factory = sqlite3.Row
+        self.db.backup(copy.db)
+        return copy
+
     def close(self) -> None:
         self.db.close()
 
@@ -513,6 +522,15 @@ class Catalog:
         with self.db:
             cur = self.db.execute(
                 f"UPDATE samples SET shortlisted_batch = NULL WHERE licensed = 0 AND {where}", params)
+        return cur.rowcount
+
+    def reject(self, catalog_uuids: list[str], tag: str) -> int:
+        """Take unbought sounds out of their batch for good: marked with ``tag`` (matches no group prefix)."""
+        with self.db:
+            cur = self.db.executemany(
+                "UPDATE samples SET shortlisted_batch = ? WHERE catalog_uuid = ? AND licensed = 0",
+                [(tag, u) for u in catalog_uuids],
+            )
         return cur.rowcount
 
     def pending_batches(self) -> dict[str, int]:

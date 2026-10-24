@@ -21,8 +21,8 @@ def pu(i):
 class World:
     """A catalog plus a counter that hands out unique sounds."""
 
-    def __init__(self, tmp_path, **cfg):
-        self.cat = Catalog(tmp_path / "c.sqlite")
+    def __init__(self, tmp_path, db=None, **cfg):
+        self.cat = Catalog(db or tmp_path / "c.sqlite")
         self.cfg = load_config(path=None, overrides={"data_dir": tmp_path / "d", "keep": 0, **cfg})
         self.n = 0
         self.ranks = {}

@@ -195,7 +195,11 @@ def _targets(config: Config, spendable: int, bought_total: int) -> dict[str, int
     return dict(zip((g.id for g in GROUPS), _split(group_total, [g.credits / base for g in GROUPS])))
 
 
-def make_plan(catalog: Catalog, config: Config, ctx: QualityContext, balance: int, now: datetime) -> Plan:
+def make_plan(
+    catalog: Catalog, config: Config, ctx: QualityContext, balance: int, now: datetime,
+    only_groups: frozenset[str] | None = None,
+) -> Plan:
+    """Plan the live balance minus ``keep``. ``only_groups`` limits the plan to those groups (no reserve share)."""
     keep = config.keep
     spendable = max(0, balance - keep)
     genres = config.genres
@@ -206,8 +210,9 @@ def make_plan(catalog: Catalog, config: Config, ctx: QualityContext, balance: in
     quotas = {g.id: genre_quotas(g, genres, targets[g.id]) for g in GROUPS}
     owned_keys = {(r.sample.basename.lower(), r.sample.duration_ms) for r in catalog.licensed_rows()}
 
+    plan_groups = [g for g in GROUPS if only_groups is None or g.id in only_groups]
     cells: dict[tuple[str, str], list[CatalogRow]] = {}
-    for group in GROUPS:
+    for group in plan_groups:
         for genre in genres:
             cells[(group.id, genre.id)] = [
                 r for r in catalog.rows_for_group(group.id, genre.id) if _eligible(r, group, genre, ctx, owned_keys)
@@ -218,7 +223,7 @@ def make_plan(catalog: Catalog, config: Config, ctx: QualityContext, balance: in
         state = _State(config, targets)
         scored_cells: dict[tuple[str, str], list[Scored]] = {}
         picked_cells: dict[tuple[str, str], list[Scored]] = {}
-        for group in GROUPS:
+        for group in plan_groups:
             for genre in genres:
                 key = (group.id, genre.id)
                 pool = [
@@ -243,13 +248,16 @@ def make_plan(catalog: Catalog, config: Config, ctx: QualityContext, balance: in
     ]
     capacity = [
         CapacityRow(g, ge, len(cells[(g, ge)]), remaining[(g, ge)], len(picked_cells[(g, ge)]), *counts[(g, ge)])
-        for g in (x.id for x in GROUPS) for ge in (x.id for x in genres)
+        for g in (x.id for x in plan_groups) for ge in (x.id for x in genres)
     ]
 
-    to_place = max(0, spendable - pending_total) - len(items)
+    if only_groups is None:
+        to_place = max(0, spendable - pending_total) - len(items)
+    else:
+        to_place = sum(c.quota for c in capacity) - len(items)
     unplaced, reason = 0, ""
     if to_place > 0:
-        placed, reason = _final_pass(scored_cells, to_place, state, genres, now)
+        placed, reason = _final_pass(scored_cells, to_place, state, genres, now, plan_groups)
         items += placed
         unplaced = to_place - len(placed)
         if unplaced == 0:
@@ -257,9 +265,10 @@ def make_plan(catalog: Catalog, config: Config, ctx: QualityContext, balance: in
     return Plan(order_items(items), balance, keep, spendable, pending_total, capacity, unplaced, reason, now)
 
 
-def _final_pass(scored_cells, to_place: int, state: _State, genres, now: datetime) -> tuple[list[PlanItem], str]:
+def _final_pass(scored_cells, to_place: int, state: _State, genres, now: datetime,
+                plan_groups) -> tuple[list[PlanItem], str]:
     """Spend leftover credits on the best remaining sounds in any group; caps still apply."""
-    groups = {g.id: g for g in GROUPS}
+    groups = {g.id: g for g in plan_groups}
     genre_by_id = {g.id: g for g in genres}
     best: dict[str, tuple[Scored, str, str]] = {}
     for (group_id, genre_id), pool in scored_cells.items():

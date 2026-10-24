@@ -89,6 +89,13 @@ PAGE = """<!doctype html>
   var tbody = document.getElementById('rows');
   var rows = [];
   var cur = 0;
+  var planMode = data.mode === 'plan';
+  if (planMode) {
+    var head = document.querySelector('thead tr');
+    ['Group / genre', 'Why'].forEach(function (t) {
+      var th = document.createElement('th'); th.textContent = t; head.appendChild(th);
+    });
+  }
 
   function cell(tr, text, cls) {
     var td = document.createElement('td');
@@ -128,6 +135,7 @@ PAGE = """<!doctype html>
     cell(tr, r.bpm === null ? '' : r.bpm);
     cell(tr, r.key);
     cell(tr, r.tags, 'tags');
+    if (planMode) { cell(tr, r.group + ' / ' + r.genre); cell(tr, r.why, 'tags'); }
     tr.addEventListener('click', function (e) { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') select(i); });
     tbody.appendChild(tr);
     rows.push({ data: r, tr: tr, box: box });
@@ -175,6 +183,7 @@ PAGE = """<!doctype html>
   });
 
   document.getElementById('export').addEventListener('click', function () {
+    if (planMode) { exportRejected(); return; }
     var approved = rows.filter(function (row) { return row.box.checked; })
                        .map(function (row) { return row.data.uuid; });
     var body = JSON.stringify({ batch_id: data.batch_id, group: data.group, catalog_uuids: approved }, null, 2);
@@ -185,6 +194,18 @@ PAGE = """<!doctype html>
     a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   });
+
+  function exportRejected() {
+    var rejected = rows.filter(function (row) { return !row.box.checked; })
+                       .map(function (row) { return row.data.uuid; });
+    var body = JSON.stringify({ plan_id: data.batch_id, rejected: rejected }, null, 2);
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
+    a.download = 'rejected-' + data.batch_id + '.json';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
 
   if (rows.length) rows[0].tr.classList.add('current');
   refresh();
@@ -209,6 +230,37 @@ def write_review_page(
     path = out_dir / f"{batch_id}.html"
     path.write_text(page, encoding="utf-8")
     return path
+
+
+def write_plan_page(rows: list[tuple[Sample, str, str, str]], plan_id: str, out_dir: Path) -> Path:
+    """Spot-check page for an autobuy plan. ``rows`` are ``(sample, group, genre, why)``.
+
+    Everything starts approved; "Export approved" writes ``rejected-<plan_id>.json`` with the unchecked rows.
+    """
+    if not BATCH_RE.match(plan_id):
+        raise ValueError(f"bad plan id {plan_id!r}")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    data_rows = [_row(s) | {"group": g, "genre": ge, "why": why} for s, g, ge, why in rows]
+    data = {"batch_id": plan_id, "group": "plan", "mode": "plan", "rows": data_rows}
+    title = html.escape(f"Autobuy plan {plan_id} ({len(rows)} sounds)")
+    page = PAGE.replace("__TITLE__", title).replace("__DATA__", _script_json(data))
+    page = page.replace("Export approved", "Export rejected list")
+    path = out_dir / f"plan-{plan_id}.html"
+    path.write_text(page, encoding="utf-8")
+    return path
+
+
+def load_rejected(path: Path) -> list[str]:
+    """Catalog uuids from an exported ``rejected-<plan_id>.json``."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read rejected file {path}: {exc}") from None
+    uuids = data.get("rejected") if isinstance(data, dict) else None
+    if not isinstance(uuids, list) or not all(isinstance(u, str) and UUID_RE.match(u) for u in uuids):
+        raise ValueError("rejected file: 'rejected' must be a list of UUIDs")
+    return list(dict.fromkeys(uuids))
 
 
 def load_approved(path: Path) -> tuple[str, str, list[str]]:

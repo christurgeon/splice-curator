@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import time
 from datetime import date, datetime
@@ -13,6 +14,10 @@ from .budget import GROUPS, Genre, genre_quotas, get_genre, get_group
 from .buy import CAP_REASONS, run_buy
 from .catalog import Catalog
 from .discover import run_discover
+from .planfiles import estimate_bytes_per_sound, save_plan, summarize
+from .quality import build_context
+from .review import load_rejected
+from .selection import AUTOBUY_SUFFIX, make_plan
 from .client import AuthRejected, SpliceClient, SpliceError
 from .config import DEFAULT_CONFIG_PATH, DELAY_KINDS, Config, Delay, load_config
 from .organize import run_organize
@@ -266,6 +271,65 @@ def cmd_buy(args, config: Config) -> int:
     return EXIT_OK
 
 
+def _free_bytes(path: Path) -> int | None:
+    probe = Path(path)
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        return shutil.disk_usage(probe).free
+    except OSError:
+        return None
+
+
+def cmd_autobuy_plan(args, config: Config) -> int:
+    if args.group != "all":
+        get_group(args.group)  # KeyError -> message
+    only = None if args.group == "all" else frozenset({args.group})
+    client = build_client(config, args.source)
+    credits = client.account().credits
+    if credits is None:
+        print("error: Splice did not report a credit balance", file=sys.stderr)
+        return EXIT_ERROR
+    catalog = Catalog(config.catalog_path)
+    if args.replace:
+        if args.confirm:
+            print(f"released {catalog.release_pending(suffix=AUTOBUY_SUFFIX)} sounds from older autobuy plans")
+        else:
+            catalog = catalog.in_memory_copy()
+            released = catalog.release_pending(suffix=AUTOBUY_SUFFIX)
+            print(f"dry run: would release {released} sounds from older autobuy plans")
+    ctx = build_context(catalog, config)
+    plan = make_plan(catalog, config, ctx, credits, datetime.now(), only)
+    print(summarize(plan, ctx, config, date.today(), _free_bytes(config.staging_dir),
+                    estimate_bytes_per_sound(config.staging_dir)))
+    if not args.confirm:
+        print("\ndry run: nothing saved (add --confirm to save this plan; planning never spends credits)")
+        return EXIT_OK
+    saved = save_plan(catalog, plan, config, with_page=args.page)
+    print(f"\nplan saved: {saved['plan']}")
+    print(f"csv: {saved['csv']}")
+    if "page" in saved:
+        print(f"spot-check page: {saved['page']}")
+    print(f"run it with: splice-curator autobuy run {saved['plan']}   (dry run unless --confirm)")
+    return EXIT_OK
+
+
+def cmd_release(args, config: Config) -> int:
+    catalog = Catalog(config.catalog_path)
+    if args.rejected:
+        uuids = load_rejected(Path(args.rejected))
+        tag = f"rejected-{Path(args.rejected).stem}"[:100]
+        print(f"rejected {catalog.reject(uuids, tag)} sounds; they leave their batches and are never planned again")
+        return EXIT_OK
+    if args.batch:
+        print(f"released {catalog.release_pending(batch_id=args.batch)} sounds from batch {args.batch}")
+    else:
+        print(f"released {catalog.release_pending(suffix=AUTOBUY_SUFFIX)} sounds from autobuy plans")
+    for batch, n in catalog.pending_batches().items():
+        print(f"  still pending: {batch} ({n})")
+    return EXIT_OK
+
+
 def cmd_organize(args, config: Config) -> int:
     catalog = Catalog(config.catalog_path)
     sources = [config.staging_dir, config.splice_dir]
@@ -331,6 +395,21 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--max-credits", type=int, help="spend at most N credits this run")
     s.add_argument("--no-download", action="store_true", help="do not download after each purchase")
     s.set_defaults(func=cmd_buy)
+
+    s = sub.add_parser("autobuy", help="plan and run automatic buying")
+    auto = s.add_subparsers(dest="autobuy_command", required=True)
+    a = auto.add_parser("plan", parents=[common],
+                        help="choose sounds for the live balance minus keep (free; saves only with --confirm)")
+    a.add_argument("--group", default="all", help="a group id, or all (default)")
+    a.add_argument("--replace", action="store_true", help="first release unbought sounds of older autobuy plans")
+    a.add_argument("--page", action="store_true", help="also write a spot-check page (with --confirm)")
+    a.add_argument("--confirm", action="store_true", help="save the plan and mark its batches (spends nothing)")
+    a.set_defaults(func=cmd_autobuy_plan)
+
+    s = sub.add_parser("release", help="return unbought planned sounds to the quotas (offline)")
+    s.add_argument("batch", nargs="?", help="one batch id (default: all autobuy plans)")
+    s.add_argument("--rejected", metavar="REJECTED.json", help="drop the sounds you rejected on the plan page")
+    s.set_defaults(func=cmd_release)
 
     s = sub.add_parser("organize", help="copy local files into an organized library")
     s.add_argument("target", metavar="TARGET_DIR")
