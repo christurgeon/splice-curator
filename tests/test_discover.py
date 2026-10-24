@@ -207,8 +207,8 @@ def test_pack_pages_limits_pack_search(tmp_path, cfg):
 
 
 def test_pack_name_patterns_dropped_in_discovery(tmp_path, cfg):
-    assert cfg.exclude_pack_patterns == ["Sounds of KSHMR"]
-    packs = [make_pack(1, name="Sounds of KSHMR Vol 5 - Drums"), make_pack(2), make_pack(3, name="SOUNDS OF KSHMR 3")]
+    assert cfg.exclude_pack_patterns == ["KSHMR"]
+    packs = [make_pack(1, name="Sounds of KSHMR Vol 5 - Drums"), make_pack(2), make_pack(3, name="Chords of KSHMR")]
     client = FakeDiscoveryClient({"tech house": packs}, {packs[0].uuid: [pack_sample(1, packs[0], "Kick.wav")]})
     cat = Catalog(tmp_path / "c.sqlite")
     run_discover(client, cat, cfg, now=lambda: NOW)

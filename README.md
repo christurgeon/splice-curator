@@ -215,7 +215,7 @@ prefer_packs = []           # +0.3 score
 prefer_labels = []
 exclude_packs = []          # never picked
 exclude_labels = []
-exclude_pack_patterns = ["Sounds of KSHMR"]  # case-insensitive pack name substrings; not discovered or picked
+exclude_pack_patterns = ["KSHMR"]  # case-insensitive pack name substrings; not discovered or picked
 
 [scoring]                   # weights; defaults shown in src/splice_curator/config.py
 in_pack_pop = 1.0

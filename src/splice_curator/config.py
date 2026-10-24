@@ -107,7 +107,7 @@ class Config:
     exclude_packs: list[str] = field(default_factory=list)
     exclude_labels: list[str] = field(default_factory=list)
     # Case-insensitive substrings of pack names to leave out (mixed-style mega packs).
-    exclude_pack_patterns: list[str] = field(default_factory=lambda: ["Sounds of KSHMR"])
+    exclude_pack_patterns: list[str] = field(default_factory=lambda: ["KSHMR"])
 
     @property
     def catalog_path(self) -> Path:

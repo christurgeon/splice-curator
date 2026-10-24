@@ -168,7 +168,7 @@ def test_build_context_reads_catalog(tmp_path):
     assert c.chart_packs[PACK] == [(7, 9)] and c.chart_labels["label a"] == (3, 3)
     assert c.pack_tags[PACK] == {"groovy"} and c.pack_published[PACK].year == 2026
     assert c.owned_packs[PACK] == 3 and c.owned_labels["label a"] == 3
-    assert c.prefer_labels == {"label a"} and c.exclude_pack_patterns == ("sounds of kshmr",)
+    assert c.prefer_labels == {"label a"} and c.exclude_pack_patterns == ("kshmr",)
     s = make_sample(9, pack_uuid=None)
     assert c.pack_uuid(s) == PACK
 

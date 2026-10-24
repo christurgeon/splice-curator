@@ -13,7 +13,7 @@ def test_autobuy_defaults():
     assert c.max_per_pack_per_group == 6 and c.max_per_pack_total == 25
     assert c.per_label_share == 0.15 and c.max_price_skips == 5
     assert c.max_label_share_total == 0.12
-    assert c.exclude_pack_patterns == ["Sounds of KSHMR"]
+    assert c.exclude_pack_patterns == ["KSHMR"]
     assert c.scoring == DEFAULT_SCORING and c.scoring is not DEFAULT_SCORING
     assert c.prefer_packs == [] and c.exclude_labels == []
 
