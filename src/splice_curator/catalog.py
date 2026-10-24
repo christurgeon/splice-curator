@@ -490,6 +490,9 @@ class Catalog:
         ).fetchone()
         return count
 
+    def rows_for_pack(self, pack_uuid: str) -> list[CatalogRow]:
+        return self._rows("WHERE pack_uuid = ?", (pack_uuid,))
+
     def get_by_catalog_uuid(self, catalog_uuid: str) -> CatalogRow | None:
         rows = self._rows("WHERE catalog_uuid = ?", (catalog_uuid,))
         return rows[0] if rows else None

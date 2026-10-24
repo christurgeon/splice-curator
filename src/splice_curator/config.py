@@ -6,6 +6,7 @@ import dataclasses
 import tomllib
 import uuid
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 from .budget import GENRES, Genre
@@ -17,6 +18,29 @@ DEFAULT_USER_AGENT = (
 )
 DELAY_KINDS = ("search", "account", "asset", "purchase", "download")
 _PATH_FIELDS = ("data_dir", "staging_dir", "splice_dir")
+_LIST_FIELDS = ("prefer_packs", "prefer_labels", "exclude_packs", "exclude_labels")
+DEFAULT_DEADLINE = date(2026, 11, 6)
+
+# Signal weights and penalties (spec 5.1). Edit under [scoring] in config.toml.
+DEFAULT_SCORING: dict[str, float] = {
+    "in_pack_pop": 1.0,
+    "query_pop": 0.6,
+    "pack_pop": 0.4,
+    "pack_recent_pop": 0.5,
+    "trending": 0.4,
+    "trending_rising_bonus": 0.2,
+    "label_chart": 0.2,
+    "fresh": 0.3,
+    "sonic_bonus": 0.1,
+    "owner_affinity": 0.15,
+    "kit_bonus": 0.1,
+    "off_genre_penalty": 0.6,
+    "bad_word_penalty": 0.4,
+    "loop_junk_penalty": 0.3,
+    "full_loop_penalty": 0.2,
+    "tops_bonus": 0.2,
+    "prefer_bonus": 0.3,
+}
 
 
 @dataclass(frozen=True)
@@ -61,6 +85,25 @@ class Config:
     refresh_poll_s: float = 30.0
     refresh_wait_s: float = 900.0
     genres: tuple[Genre, ...] = GENRES  # enabled genres only
+    # autobuy
+    keep: int = 200  # credits left unspent after the plan
+    deadline: date = DEFAULT_DEADLINE
+    recent_months: int = 30
+    packs_per_genre: int = 60
+    discovery_ttl_days: int = 7
+    chart_ttl_days: int = 7
+    chart_labels: int = 15  # labels whose own pack chart is fetched
+    max_per_pack_per_group: int = 6
+    max_per_pack_total: int = 25
+    per_label_share: float = 0.15
+    key_share_cap: float = 0.15
+    floor_high: int = 40  # score percentile floors (spec 5.3)
+    floor_low: int = 10
+    scoring: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_SCORING))
+    prefer_packs: list[str] = field(default_factory=list)
+    prefer_labels: list[str] = field(default_factory=list)
+    exclude_packs: list[str] = field(default_factory=list)
+    exclude_labels: list[str] = field(default_factory=list)
 
     @property
     def catalog_path(self) -> Path:
@@ -75,6 +118,7 @@ def _defaults() -> dict:
         "splice_dir": home / "Splice",
         "delays": default_delays(),
         "genres": {g.id: g for g in GENRES},
+        "scoring": dict(DEFAULT_SCORING),
     }
 
 
@@ -93,6 +137,14 @@ def _merge(values: dict, extra: dict) -> None:
         elif key == "genres":
             for genre_id, table in value.items():
                 values["genres"][genre_id] = _genre_from_table(genre_id, table, values["genres"].get(genre_id))
+        elif key == "scoring":
+            if unknown := set(value) - set(DEFAULT_SCORING):
+                raise ValueError(f"unknown scoring keys: {sorted(unknown)}")
+            values["scoring"].update({k: float(v) for k, v in value.items()})
+        elif key == "deadline":
+            values[key] = value if isinstance(value, date) else date.fromisoformat(str(value))
+        elif key in _LIST_FIELDS:
+            values[key] = [str(v) for v in value]
         elif key in _PATH_FIELDS:
             values[key] = Path(value).expanduser()
         else:

@@ -12,6 +12,7 @@ from .auth import COOKIE_NAMES, AuthError, load_session
 from .budget import GROUPS, Genre, genre_quotas, get_genre, get_group
 from .buy import CAP_REASONS, run_buy
 from .catalog import Catalog
+from .discover import run_discover
 from .client import AuthRejected, SpliceClient, SpliceError
 from .config import DEFAULT_CONFIG_PATH, DELAY_KINDS, Config, Delay, load_config
 from .organize import run_organize
@@ -125,6 +126,26 @@ def cmd_search(args, config: Config) -> int:
                 break
     print(f"recorded {total} results; group {group.id} now has "
           f"{len(catalog.rows_for_group(group.id))} catalog rows")
+    return EXIT_OK
+
+
+def cmd_discover(args, config: Config) -> int:
+    genres = _pick_genres(args, config)
+    if genres is None:
+        return EXIT_AUTH
+    client = build_client(config, args.source)
+    catalog = Catalog(config.catalog_path)
+    report = run_discover(client, catalog, config, genres, force=args.force, log=_log)
+    for genre_id, n in report.packs_per_genre.items():
+        print(f"{genre_id}: {n} packs")
+    print(f"packs fetched {report.packs_fetched}, cached {report.packs_cached}, "
+          f"sounds recorded {report.samples_recorded}")
+    print("requests: " + ", ".join(f"{k} {v}" for k, v in sorted(report.requests.items())))
+    for warning in report.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    if report.stopped_reason:
+        print(f"stopped: {report.stopped_reason}", file=sys.stderr)
+        return EXIT_AUTH if "log in" in report.stopped_reason else EXIT_ERROR
     return EXIT_OK
 
 
@@ -282,6 +303,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--pages", type=int, default=2)
     s.add_argument("--query", help="one query instead of the genre and subtype queries (no genre)")
     s.set_defaults(func=cmd_search)
+
+    s = sub.add_parser("discover", parents=[common],
+                       help="find the best packs and their best sounds per genre (free, read-only)")
+    s.add_argument("--genre", help="discover one genre only (default: every enabled genre)")
+    s.add_argument("--force", action="store_true", help="ignore cached charts and packs")
+    s.set_defaults(func=cmd_discover)
 
     s = sub.add_parser("shortlist", help="rank a group and write an HTML review page")
     s.add_argument("--group", required=True)
