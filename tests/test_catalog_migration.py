@@ -119,3 +119,15 @@ def test_set_price(tmp_path):
     cat.record_search([s], "q", "kicks", 1, 50)
     cat.set_price(s.catalog_uuid, 1)
     assert cat.get_by_catalog_uuid(s.catalog_uuid).price == 1
+
+
+def test_in_pack_position_takes_the_latest_fetch_and_query_position_keeps_the_best(tmp_path):
+    cat = Catalog(tmp_path / "c.sqlite")
+    a = make_sample(1)
+    cat.record_search([a], "house kick", "kicks", 1, 50)  # query position 0
+    cat.record_pack_samples([a], PACK, first_position=3, count=90)
+    cat.record_pack_samples([a], PACK, first_position=40, count=120)  # its rank in the pack dropped
+    row = cat.get_by_catalog_uuid(a.catalog_uuid)
+    assert row.in_pack_position == 40 and row.in_pack_count == 120
+    cat.record_search([a], "other", "kicks", 2, 50)  # a worse query position
+    assert cat.get_by_catalog_uuid(a.catalog_uuid).best_position == 0

@@ -304,6 +304,8 @@ class Catalog:
         """Upsert sounds found inside a pack; positions go to the in-pack columns only.
 
         New rows get the UNRANKED query position, so in-pack and query positions never mix.
+        The in-pack position is the latest fetched one (a sound's rank in its pack can drop),
+        unlike ``best_position``, which keeps the best query position.
         """
         now = datetime.now().isoformat(timespec="seconds")
         with self.db:
@@ -322,8 +324,7 @@ class Catalog:
                         licensed = MAX(samples.licensed, excluded.licensed),
                         preview_url = excluded.preview_url, updated_at = excluded.updated_at,
                         pack_uuid = excluded.pack_uuid,
-                        in_pack_position = MIN(COALESCE(samples.in_pack_position, excluded.in_pack_position),
-                                               excluded.in_pack_position),
+                        in_pack_position = excluded.in_pack_position,
                         in_pack_count = excluded.in_pack_count
                     """,
                     (
