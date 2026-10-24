@@ -96,7 +96,8 @@ class Config:
     chart_labels: int = 15  # labels whose own pack chart is fetched
     max_per_pack_per_group: int = 6
     max_per_pack_total: int = 25
-    per_label_share: float = 0.15
+    per_label_share: float = 0.15  # most credits one label may take inside one group
+    max_label_share_total: float = 0.12  # most credits one label may take of the whole plan
     key_share_cap: float = 0.15
     floor_high: int = 40  # score percentile floors (spec 5.3)
     floor_low: int = 10

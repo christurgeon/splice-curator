@@ -99,7 +99,7 @@ def test_capacity_shortfall_report_and_final_pass(tmp_path):
 
 
 def test_unplaced_credits_are_reported_with_reason(tmp_path):
-    w = World(tmp_path)
+    w = World(tmp_path, max_label_share_total=1.0)  # one label only; the plan-wide label cap is tested apart
     w.add("kicks", pack=1, n=30)
     plan = w.plan(balance=500)
     assert plan.total == 5  # per-pack cap per batch
@@ -139,7 +139,7 @@ def test_label_share_cap_per_group(tmp_path):
 
 
 def test_near_duplicates_and_cross_pack_duplicates_skipped(tmp_path):
-    w = World(tmp_path)
+    w = World(tmp_path, max_label_share_total=1.0)  # three labels only
     w.add("kicks", pack=1, name="Pack 1/Kick_Deep_wet.wav", duration_ms=700)
     w.add("kicks", pack=1, name="Pack 1/Kick_Deep_dry.wav", duration_ms=701)  # variant of the first
     w.add("kicks", pack=1, name="Pack 1/Kick_Deep_2.wav", duration_ms=702)  # digit kept: distinct
@@ -284,3 +284,40 @@ def test_off_genre_packs_are_not_candidates(tmp_path):
     w.add("kicks", pack=2, n=3, pack_genre="rnb")
     plan = w.plan(balance=100)
     assert plan.total > 0 and all(i.row.sample.pack_genre == "tech house" for i in plan.items)
+
+
+def _label_world(tmp_path, **cfg):
+    w = World(tmp_path, per_label_share=1.0, **cfg)  # only the plan-wide cap limits labels here
+    for g in ("kicks", "snares_claps", "hats_cymbals"):
+        for p in range(1, 30):
+            w.add(g, pack=p, label="Big Label", n=4)  # the best packs
+        for p in range(30, 90):
+            w.add(g, pack=p, label=f"Label {p % 20}", n=4)
+    return w
+
+
+def test_plan_wide_label_cap_and_all_credits_placed(tmp_path):
+    plan = _label_world(tmp_path).plan(balance=400)
+    assert plan.total == 400 and plan.unplaced == 0
+    labels = Counter(i.row.sample.label for i in plan.items)
+    assert labels["Big Label"] == 48  # 12% of 400
+    assert max(labels.values()) <= 0.12 * plan.total
+
+
+def test_plan_wide_label_cap_is_configurable(tmp_path):
+    plan = _label_world(tmp_path, max_label_share_total=0.25).plan(balance=400)
+    assert plan.total == 400
+    big = sum(1 for i in plan.items if i.row.sample.label == "Big Label")
+    assert 48 < big <= 100  # the per-group label caps also apply
+
+
+def test_plan_wide_label_cap_holds_when_credits_cannot_all_be_placed(tmp_path):
+    w = World(tmp_path, per_label_share=1.0)
+    for p in range(1, 10):
+        w.add("kicks", pack=p, label="Big Label", n=5)
+    for p in range(10, 20):
+        w.add("kicks", pack=p, label=f"Label {p}", n=1)
+    plan = w.plan(balance=1000)
+    labels = Counter(i.row.sample.label for i in plan.items)
+    assert plan.unplaced == 1000 - plan.total > 0 and "caps" in plan.unplaced_reason
+    assert labels["Big Label"] <= max(1, 0.12 * plan.total)

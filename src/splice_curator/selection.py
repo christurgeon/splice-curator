@@ -101,9 +101,10 @@ def _eligible(row: CatalogRow, group: Group, genre: Genre, ctx: QualityContext, 
 class _State:
     """Counters for the variety caps of one selection run."""
 
-    def __init__(self, config: Config, targets: dict[str, int]) -> None:
+    def __init__(self, config: Config, targets: dict[str, int], label_total_cap: int | None = None) -> None:
         self.cfg = config
         self.label_cap = {g: max(1, math.ceil(config.per_label_share * t)) for g, t in targets.items()}
+        self.label_total_cap = label_total_cap  # plan-wide, across groups (``max_label_share_total``)
         self.key_cap = {g: max(1, math.ceil(config.key_share_cap * t)) for g, t in targets.items()}
         self.chosen: set[str] = set()
         self.dups: set[tuple[str, str]] = set()
@@ -112,6 +113,7 @@ class _State:
         self.pack_group: Counter = Counter()
         self.pack_batch: Counter = Counter()
         self.label_group: Counter = Counter()
+        self.label_total: Counter = Counter()
         self.key_group: Counter = Counter()
 
     def reason_blocked(self, c: Scored, group: Group, genre: Genre) -> str | None:
@@ -128,6 +130,8 @@ class _State:
                 self.pack_total[pack] >= cfg.max_per_pack_total:
             return "caps"
         if s.label and self.label_group[(group.id, s.label)] >= self.label_cap[group.id]:
+            return "caps"
+        if s.label and self.label_total_cap is not None and self.label_total[s.label] >= self.label_total_cap:
             return "caps"
         if group.id in KEY_CAPPED_GROUPS and s.key and \
                 self.key_group[(group.id, s.key, s.chord_type)] >= self.key_cap[group.id]:
@@ -147,6 +151,7 @@ class _State:
         self.pack_total[pack] += 1
         if s.label:
             self.label_group[(group.id, s.label)] += 1
+            self.label_total[s.label] += 1
         if group.id in KEY_CAPPED_GROUPS and s.key:
             self.key_group[(group.id, s.key, s.chord_type)] += 1
         return True
@@ -196,6 +201,11 @@ def _targets(config: Config, spendable: int, bought_total: int) -> dict[str, int
     return dict(zip((g.id for g in GROUPS), _split(group_total, [g.credits / base for g in GROUPS])))
 
 
+def _label_total_cap(share: float, total: int) -> int | None:
+    """Most credits one label may take in a plan of ``total`` credits (at least 1); None if uncapped."""
+    return None if share >= 1 else max(1, math.floor(share * total + 1e-9))
+
+
 def make_plan(
     catalog: Catalog, config: Config, ctx: QualityContext, balance: int, now: datetime,
     only_groups: frozenset[str] | None = None,
@@ -230,8 +240,8 @@ def make_plan(
     # Scarce cells first, so popular packs do not hit the per-pack total before a thin group is served.
     order = sorted(cells, key=lambda k: (len(cells[k]) / max(1, remaining[k]), k))
 
-    def run(kit_packs: dict[str, set[str]] | None):
-        state = _State(config, targets)
+    def run(kit_packs: dict[str, set[str]] | None, label_cap: int | None):
+        state = _State(config, targets, label_cap)
         scored_cells: dict[tuple[str, str], list[Scored]] = {}
         picked_cells: dict[tuple[str, str], list[Scored]] = {}
         groups = {g.id: g for g in plan_groups}
@@ -247,33 +257,44 @@ def make_plan(
             picked_cells[key] = _fill_cell(pool, remaining[key], group, genre, state)
         return state, scored_cells, picked_cells
 
-    _, _, pass1 = run(None)
-    kit_packs: dict[str, set[str]] = {}
-    for (group_id, _genre), picked in pass1.items():
-        for c in picked:
-            kit_packs.setdefault(_pack_key(c.row.sample), set()).add(group_id)
-    state, scored_cells, picked_cells = run(kit_packs)
+    def select(label_cap: int | None):
+        _, _, pass1 = run(None, label_cap)
+        kit_packs: dict[str, set[str]] = {}
+        for (group_id, _genre), picked in pass1.items():
+            for c in picked:
+                kit_packs.setdefault(_pack_key(c.row.sample), set()).add(group_id)
+        state, scored_cells, picked_cells = run(kit_packs, label_cap)
 
-    items = [
-        PlanItem(0, batch_id_for(g, ge, now), g, ge, c.row, SAMPLE_PRICE, c.score, c.why)
-        for (g, ge), picked in picked_cells.items() for c in picked
-    ]
-    capacity = [
-        CapacityRow(g, ge, len(cells[(g, ge)]), remaining[(g, ge)], len(picked_cells[(g, ge)]), *counts[(g, ge)])
-        for g in (x.id for x in plan_groups) for ge in (x.id for x in genres)
-    ]
+        items = [
+            PlanItem(0, batch_id_for(g, ge, now), g, ge, c.row, SAMPLE_PRICE, c.score, c.why)
+            for (g, ge), picked in picked_cells.items() for c in picked
+        ]
+        capacity = [
+            CapacityRow(g, ge, len(cells[(g, ge)]), remaining[(g, ge)], len(picked_cells[(g, ge)]), *counts[(g, ge)])
+            for g in (x.id for x in plan_groups) for ge in (x.id for x in genres)
+        ]
+        to_place = plan_target - len(items)
+        unplaced, reason = 0, ""
+        if to_place > 0:
+            placed, reason = _final_pass(scored_cells, to_place, state, genres, now, plan_groups)
+            items += placed
+            unplaced = to_place - len(placed)
+            if unplaced == 0:
+                reason = ""
+        return items, capacity, unplaced, reason
 
-    if only_groups is None:
-        to_place = budget - len(items)
-    else:
-        to_place = sum(c.quota for c in capacity) - len(items)
-    unplaced, reason = 0, ""
-    if to_place > 0:
-        placed, reason = _final_pass(scored_cells, to_place, state, genres, now, plan_groups)
-        items += placed
-        unplaced = to_place - len(placed)
-        if unplaced == 0:
-            reason = ""
+    # The label cap is a share of the plan total. If not every credit can be placed, the total is
+    # smaller than planned, so select again with the cap of the smaller total until it holds.
+    plan_target = budget if only_groups is None else sum(remaining.values())
+    share = config.max_label_share_total
+    label_cap = _label_total_cap(share, plan_target)
+    for _ in range(20):
+        items, capacity, unplaced, reason = select(label_cap)
+        tighter = _label_total_cap(share, len(items))
+        top = max(Counter(i.row.sample.label for i in items if i.row.sample.label).values(), default=0)
+        if tighter is None or top <= tighter:
+            break
+        label_cap = min(label_cap - 1, tighter)
     return Plan(order_items(items), balance, keep, spendable, pending_total, capacity, unplaced, reason, now)
 
 
@@ -299,7 +320,7 @@ def _final_pass(scored_cells, to_place: int, state: _State, genres, now: datetim
                                    SAMPLE_PRICE, c.score, c.why, final_pass=True))
     if len(placed) >= to_place:
         return placed, ""
-    return placed, "no candidates left" if not ordered else "caps and duplicates leave no candidates"
+    return placed, "no candidates left" if not ordered else "caps (pack, label, key) and duplicates leave no candidates"
 
 
 def order_items(items: list[PlanItem]) -> list[PlanItem]:
