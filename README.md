@@ -36,6 +36,13 @@ splice.com) as `SPLICE_TOKEN`, or pass `--source chrome` to read it from
 your local Chrome profile. The token is never printed, logged, or written
 to disk. Runs stop with a clear message when it has expired.
 
+With `--source chrome`, long runs pick up the renewed token from Chrome.
+Splice renews it only when a splice.com page loads after the old token has
+expired, so on macOS the tool then runs
+`open -g -a "Google Chrome" https://splice.com/sounds` once per expired token
+(Chrome stays in the background), logs one line, and keeps checking Chrome's
+cookies until `refresh_wait_s` ends. Chrome must be running and logged in.
+
 ## Configuration
 
 `~/.splice-curator/config.toml` (created on first run). Every value has a
@@ -153,8 +160,11 @@ them within the daily cap. Presets are not covered.
    rejected list". Saving a plan never spends credits.
 3. `autobuy run PLAN.json` is a dry run unless `--confirm`. It buys in plan
    order (groups interleaved, so an early stop leaves a balanced library) and
-   skips `rejected-<id>.json` if it sits next to the plan. `--until-done`
-   sleeps until midnight at the daily cap and continues. Run it under
+   skips `rejected-<id>.json` if it sits next to the plan. It re-reads each
+   sound before buying it and skips sounds that left their batch while it ran
+   (`release`, `plan --replace`). It stops when the balance would fall below
+   `keep`. `--until-done` sleeps until midnight at the daily cap, checks the
+   balance against the logged spend, and continues. Run it under
    `caffeinate -i` with a splice.com tab open in Chrome:
 
    ```bash
@@ -172,9 +182,15 @@ as `price_unknown` or `price_mismatch`; the run stops after
 `max_price_skips`); budgets and `--max-credits` count credits; every 25
 purchases the balance is compared with the logged spend and a mismatch stops
 the run; a lock file (`buy.lock`) allows one buying process at a time; sounds
-already owned in the catalog cost no request; an earlier `uncertain` purchase
-is checked read-only before the next run; staging free space is checked
-before each buy.
+already owned in the catalog cost no request; each purchase is logged as
+`uncertain` before it is sent and settled after, so an `uncertain` row (also
+one left by a crash or Ctrl-C) is checked read-only before the next run; a
+purchase counts toward the daily cap of the day it finished; a sound whose
+license check fails is skipped and logged as `check_failed` (it counts toward
+`max_price_skips`); staging free space is checked before each buy.
+
+The plan never places more than live balance minus `keep` minus credits
+already pending in unbought batches (manual ones too).
 
 New config keys (all optional):
 
@@ -191,6 +207,7 @@ chart_labels = 15           # labels whose own weekly pack chart is read
 max_per_pack_per_group = 6
 max_per_pack_total = 25
 per_label_share = 0.15      # of a group's target
+max_label_share_total = 0.12  # of the whole plan; unplaced credits are reported
 key_share_cap = 0.15        # bass and chord loops
 floor_high = 40             # score percentile floors
 floor_low = 10
@@ -198,6 +215,7 @@ prefer_packs = []           # +0.3 score
 prefer_labels = []
 exclude_packs = []          # never picked
 exclude_labels = []
+exclude_pack_patterns = ["Sounds of KSHMR"]  # case-insensitive pack name substrings; not discovered or picked
 
 [scoring]                   # weights; defaults shown in src/splice_curator/config.py
 in_pack_pop = 1.0
