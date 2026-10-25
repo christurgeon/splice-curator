@@ -46,6 +46,45 @@ def test_stops_after_max_price_skips(tmp_path, fake_client):
     assert fake_client.count("purchase") == 0
 
 
+def _count_rows(catalog, uuid, result):
+    return catalog.db.execute(
+        "SELECT COUNT(*) FROM purchases WHERE catalog_uuid = ? AND result = ?", (uuid, result)).fetchone()[0]
+
+
+def test_repeat_skips_do_not_count(tmp_path, fake_client):
+    samples, catalog, path = setup(tmp_path, fake_client, n=6)
+    for s in samples[:3]:
+        fake_client.prices[s.catalog_uuid] = None
+        catalog.log_purchase(s.catalog_uuid, "price_unknown", None, None, datetime(2026, 10, 23))
+    report = buy(fake_client, catalog, path, max_price_skips=3)
+    assert report.stopped_reason is None
+    assert report.price_skips == 0
+    assert purchased(fake_client) == [s.catalog_uuid for s in samples[3:]]
+    for s in samples[:3]:
+        assert _count_rows(catalog, s.catalog_uuid, "price_unknown") == 2
+
+
+def test_new_skips_still_stop_the_run(tmp_path, fake_client):
+    samples, catalog, path = setup(tmp_path, fake_client, n=8)
+    for s in samples[:2]:
+        catalog.log_purchase(s.catalog_uuid, "price_unknown", None, None, datetime(2026, 10, 23))
+    for s in samples[:5]:
+        fake_client.prices[s.catalog_uuid] = None
+    report = buy(fake_client, catalog, path, max_price_skips=3)
+    assert report.price_skips == 3
+    assert "price" in report.stopped_reason
+
+
+def test_different_result_counts_as_new(tmp_path, fake_client):
+    samples, catalog, path = setup(tmp_path, fake_client, n=4)
+    for s in samples[:3]:
+        catalog.log_purchase(s.catalog_uuid, "price_mismatch", None, None, datetime(2026, 10, 23))
+        fake_client.prices[s.catalog_uuid] = None
+    report = buy(fake_client, catalog, path, max_price_skips=3)
+    assert report.price_skips == 3
+    assert "price" in report.stopped_reason
+
+
 def test_expected_price_other_than_one(tmp_path, fake_client):
     samples, catalog, _ = setup(tmp_path, fake_client, n=1)
     fake_client.prices[samples[0].catalog_uuid] = 3

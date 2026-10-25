@@ -84,6 +84,15 @@ def test_purchase_log_daily_count(tmp_path):
     assert cat.purchases_on(date(2026, 10, 23)) == 1
 
 
+def test_skipped_before(tmp_path):
+    cat = Catalog(tmp_path / "c.sqlite")
+    assert not cat.skipped_before("u1", "price_unknown")
+    cat.log_purchase("u1", "price_unknown", None, None, datetime.now())
+    assert cat.skipped_before("u1", "price_unknown")
+    assert not cat.skipped_before("u1", "price_mismatch")
+    assert not cat.skipped_before("u2", "price_unknown")
+
+
 def test_purchase_log_rejects_unknown_result(tmp_path):
     cat = Catalog(tmp_path / "c.sqlite")
     try:

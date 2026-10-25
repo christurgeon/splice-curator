@@ -99,8 +99,11 @@ def resolve_uncertain(client: SpliceClient, catalog: Catalog, now: Callable[[], 
 
 
 def _skip(run: BuyRun, uuid: str, result: str, when: datetime) -> str | None:
-    """Log a sound that was not bought and go on, or stop after ``max_price_skips`` skips."""
+    """Log a sound that was not bought. Only a new skip (same sound, same result) counts toward the limit."""
+    repeat = run.catalog.skipped_before(uuid, result)
     run.catalog.log_purchase(uuid, result, run.credits, run.credits, when)
+    if repeat:
+        return None
     run.report.price_skips += 1
     if run.report.price_skips >= run.max_price_skips:
         return f"stopped after {run.report.price_skips} skipped sounds (last: {result} for {uuid})"

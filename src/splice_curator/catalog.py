@@ -440,6 +440,12 @@ class Catalog:
         ).fetchone()
         return count
 
+    def skipped_before(self, catalog_uuid: str, result: str) -> bool:
+        row = self.db.execute(
+            "SELECT 1 FROM purchases WHERE catalog_uuid = ? AND result = ? LIMIT 1", (catalog_uuid, result)
+        ).fetchone()
+        return row is not None
+
     def unresolved_uncertain(self) -> list[str]:
         """Sounds with an `uncertain` purchase log row and no later outcome, not known as owned."""
         rows = self.db.execute(
