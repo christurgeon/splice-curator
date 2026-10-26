@@ -31,7 +31,6 @@ EXIT_OK, EXIT_ERROR, EXIT_AUTH = 0, 1, 2
 
 
 def build_client(config: Config, source: str) -> SpliceClient:
-    session = load_session(source, time.time(), COOKIE_NAMES)
     throttle = Throttle(
         config.delays,
         config.pause_every,
@@ -40,6 +39,8 @@ def build_client(config: Config, source: str) -> SpliceClient:
     )
     refresher = (lambda: load_session("chrome", time.time(), COOKIE_NAMES)) if source == "chrome" else None
     opener = open_splice_in_chrome if source == "chrome" and sys.platform == "darwin" else None
+    # With the opener, an expired token is fine at start: the first request renews it through Chrome.
+    session = load_session(source, time.time(), COOKIE_NAMES, allow_expired=opener is not None)
     return SpliceClient(session, throttle, config, refresher=refresher, opener=opener)
 
 

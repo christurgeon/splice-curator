@@ -79,7 +79,8 @@ def _chrome_cookies() -> dict[str, str]:
         raise AuthError(f"could not read Chrome cookies ({type(exc).__name__})") from None
 
 
-def load_session(source: str, now: float, cookie_names: tuple[str, ...]) -> Session:
+def load_session(source: str, now: float, cookie_names: tuple[str, ...], allow_expired: bool = False) -> Session:
+    """Read the Splice token. ``allow_expired`` keeps an expired token for a client that can renew it."""
     if source == "env":
         token = os.environ.get(ENV_VAR, "").strip()
         if not token:
@@ -97,6 +98,6 @@ def load_session(source: str, now: float, cookie_names: tuple[str, ...]) -> Sess
     exp = jwt_expiry(token)
     if exp is None:
         raise AuthError("token is not a readable JWT; copy it again from splice.com")
-    if exp <= now:
+    if exp <= now and not allow_expired:
         raise AuthError("token expired; log in to splice.com again")
     return Session(token=token, cookies=cookies)

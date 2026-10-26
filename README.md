@@ -37,9 +37,11 @@ uv sync --extra chrome  # optional: read the token from Chrome's cookie store
 Either export the token (the value of the `_splice_token_prod` cookie on
 splice.com) as `SPLICE_TOKEN`, or pass `--source chrome` to read it from
 your local Chrome profile. The token is never printed, logged, or written
-to disk. Runs stop with a clear message when it has expired.
+to disk. With `SPLICE_TOKEN`, runs stop with a clear message when it has
+expired.
 
-With `--source chrome`, long runs pick up the renewed token from Chrome.
+With `--source chrome`, long runs pick up the renewed token from Chrome, and
+a command started after the token expired renews it the same way.
 Splice renews it only when a splice.com page loads after the old token has
 expired, so on macOS the tool then runs
 `open -g -a "Google Chrome" https://splice.com/sounds` once per expired token
