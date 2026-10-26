@@ -46,6 +46,16 @@ def test_expired_token_raises(monkeypatch):
     assert "expired" in str(exc.value)
 
 
+def test_expired_token_allowed_when_it_can_be_renewed(monkeypatch):
+    tok = make_jwt({"exp": int(NOW) - 1})
+    monkeypatch.setenv("SPLICE_TOKEN", tok)
+    s = load_session("env", NOW, COOKIE_NAMES, allow_expired=True)
+    assert s.token == tok and s.expires_at == int(NOW) - 1
+    monkeypatch.setenv("SPLICE_TOKEN", "not-a-jwt")
+    with pytest.raises(AuthError):
+        load_session("env", NOW, COOKIE_NAMES, allow_expired=True)
+
+
 def test_unreadable_token_raises(monkeypatch):
     monkeypatch.setenv("SPLICE_TOKEN", "not-a-jwt")
     with pytest.raises(AuthError) as exc:

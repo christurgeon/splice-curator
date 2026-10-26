@@ -19,7 +19,9 @@ from .sync import AUDIO_EXTENSIONS
 
 CSV_COLUMNS = ["group", "genre", "pack", "label", "score", "why", "link"]
 DEFAULT_SOUND_BYTES = 1_500_000
-BUYING_SECONDS_PER_SOUND = 19  # measured with download; spec 5.5
+# Request time per sound on top of the delays; measured 2026-10-24/25 (21 s and 15 s per sound
+# against 15 s and 9.5 s of mean delays).
+REQUEST_SECONDS_PER_SOUND = 6
 
 
 @dataclass
@@ -118,11 +120,17 @@ def estimate_bytes_per_sound(staging: Path) -> int:
     return int(sum(sizes) / len(sizes)) if sizes else DEFAULT_SOUND_BYTES
 
 
+def seconds_per_sound(config: Config) -> float:
+    """Expected buying time per sound: price check, purchase, file lookup, download."""
+    mean = {kind: (d.min_s + d.max_s) / 2 for kind, d in config.delays.items()}
+    return 2 * mean["asset"] + mean["purchase"] + mean["download"] + REQUEST_SECONDS_PER_SOUND
+
+
 def schedule_lines(n: int, config: Config, today: date) -> list[str]:
     """Days needed, latest safe start, and the cap needed if behind."""
     cap = config.max_purchases_per_day
     days_needed = max(1, math.ceil(n / cap)) if n else 0
-    hours = n * BUYING_SECONDS_PER_SOUND / 3600
+    hours = n * seconds_per_sound(config) / 3600
     head = f"buying: {n} credits = {days_needed} buying days at {cap}/day (about {hours:.1f} h in all); "
     if config.deadline is None:
         return [head + "no deadline set"]

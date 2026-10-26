@@ -1,6 +1,8 @@
 import json
 from datetime import date, datetime
 
+import pytest
+
 from splice_curator import cli
 from splice_curator.config import load_config
 from splice_curator.planfiles import estimate_bytes_per_sound, load_plan, save_plan, schedule_lines
@@ -143,4 +145,13 @@ def test_schedule_without_deadline_shows_days_only():
     from splice_curator.config import load_config
     from splice_curator.planfiles import schedule_lines
     lines = schedule_lines(1000, load_config(path=None, overrides={"max_purchases_per_day": 500}), date(2026, 1, 1))
-    assert lines == ["buying: 1000 credits = 2 buying days at 500/day (about 5.3 h in all); no deadline set"]
+    assert lines == ["buying: 1000 credits = 2 buying days at 500/day (about 7.6 h in all); no deadline set"]
+
+
+def test_seconds_per_sound_follows_the_delays():
+    from splice_curator.planfiles import seconds_per_sound
+    assert seconds_per_sound(load_config(path=None)) == pytest.approx(27.5)
+    fast = load_config(path=None, overrides={"delays": {"asset": {"min_s": 1.5, "max_s": 2.5},
+                                                        "purchase": {"min_s": 3, "max_s": 5},
+                                                        "download": {"min_s": 1, "max_s": 2}}})
+    assert seconds_per_sound(fast) == pytest.approx(15.5)  # measured about 15 s on 2026-10-25

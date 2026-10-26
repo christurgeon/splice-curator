@@ -288,12 +288,25 @@ def test_build_client_opener_only_for_chrome_on_macos(config, monkeypatch):
     from splice_curator import cli
     from splice_curator.client import open_splice_in_chrome
 
-    monkeypatch.setattr(cli, "load_session", lambda source, now, names: session_for(3600))
+    monkeypatch.setattr(cli, "load_session", lambda source, now, names, **kw: session_for(3600))
     monkeypatch.setattr(cli.sys, "platform", "darwin")
     assert cli.build_client(config, "chrome").opener is open_splice_in_chrome
     assert cli.build_client(config, "env").opener is None
     monkeypatch.setattr(cli.sys, "platform", "linux")
     assert cli.build_client(config, "chrome").opener is None
+
+
+@pytest.mark.parametrize("source, platform, allowed", [
+    ("chrome", "darwin", True), ("chrome", "linux", False), ("env", "darwin", False)])
+def test_build_client_accepts_expired_token_only_when_chrome_can_renew_it(config, monkeypatch, source, platform,
+                                                                           allowed):
+    from splice_curator import cli
+
+    calls = []
+    monkeypatch.setattr(cli, "load_session", lambda *a, **kw: calls.append(kw) or session_for(-60))
+    monkeypatch.setattr(cli.sys, "platform", platform)
+    cli.build_client(config, source)
+    assert calls == [{"allow_expired": allowed}]
 
 
 def test_open_splice_in_chrome_runs_open_in_background(monkeypatch):
