@@ -256,6 +256,24 @@ def test_opener_then_chrome_renewal_resumes(config, capsys):
     assert "renewed Splice login" in err and new.token not in err and old.token not in err
 
 
+def test_start_with_expired_token_opens_chrome_first_and_never_sends_it(config, capsys):
+    old, new = session_for(-60), session_for(3600, "b")
+    opener = Opener()
+    env = Env(config, old, opener=opener)
+    opener.env = env
+
+    def refresh():  # the real refresher rejects an expired cookie until Chrome writes the new one
+        if opener.times and env.now >= opener.times[0] + 30:
+            return new
+        raise AuthError("token expired; log in to splice.com again")
+
+    env.client.refresher = refresh
+    env.client.account()
+    assert opener.times == [NOW]  # opened at once, before any wait
+    assert [r.headers["authorization"] for r in env.requests] == ["Bearer " + new.token]
+    assert "renewed Splice login" in capsys.readouterr().err
+
+
 def test_opener_not_used_when_chrome_renews_before_expiry(config):
     opener = Opener()
     env = Env(config, session_for(100), [session_for(100), session_for(7200, "b")], opener=opener)
