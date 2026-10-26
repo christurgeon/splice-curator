@@ -9,16 +9,19 @@ cross-platform (exFAT-safe) copy of your library.
 
 - **Unofficial.** This project is not affiliated with, endorsed by, or
   supported by Splice.
+- It uses **Splice's private web API**. Splice publishes no API, so the
+  requests this tool sends can change or break at any time.
 - It uses **your own Splice account** and your own browser session token.
-- It **spends your credits only with explicit confirmation**: `buy` is a dry
-  run unless you pass `--confirm`, and a purchase is never retried
-  automatically.
+  Use it only with your own account and within Splice's terms of service.
+  Automated access may put your account at risk. Requests are paced slowly
+  on purpose; use at your own risk.
+- It **spends your credits only with explicit confirmation**: `buy` and
+  `autobuy run` are dry runs unless you pass `--confirm`, and a purchase is
+  never retried automatically.
 - It **does not bypass licensing**. It only downloads sounds you already
-  own or have just licensed with your credits. Preview audio is streamed in
-  the review page for listening only and is never saved to disk.
-- Splice publishes no API. **Automated access may break Splice's terms of
-  service and put your account at risk.** Requests are paced slowly on
-  purpose; use at your own risk.
+  own or have just licensed with your credits. It never unscrambles or saves
+  preview audio: the review page links each sound to splice.com, where
+  Splice's own player plays it.
 
 ## Install
 
